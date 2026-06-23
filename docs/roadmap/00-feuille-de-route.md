@@ -31,7 +31,8 @@ Reproduire **tout** le modèle opérationnel AWS sur Huawei (cf. ADR 0003 D1). P
 **Couche fournisseur & exécution**
 - [x] `src/huawei-sign.ts` — signature AK/SK (WebCrypto) + tests (8 ✓, **validée en live**).
 - [x] `src/huawei.ts` — contrat implémenté ; **cycle de vie validé E2E en live** (keypair → launch→job → resolve → describe IP → listManaged → terminate +EIP+volume, teardown propre). Reste : EVS snapshots, restore IMS (U6), CES idle.
-- [~] Port de la base saine AWS : `crypto`/`oidc`/`sentry`/`db`/`email`/**`presets`** (catalogue Huawei)/**`index.ts`** (réconciliateur + routes, modèle de job) ✅ (typecheck + 8 tests OK, 2 commits). **Reste : `web/` (SPA)** + exécution bout en bout.
+- [x] **Port complet** : backend (`crypto`/`oidc`/`sentry`/`db`/`email`/`presets`/`index.ts` réconciliateur+routes) **+ SPA `web/`** (typecheck + 8 tests + build OK, 3 commits). App **exécutée en local** (`wrangler dev`) servant le catalogue Huawei `eu-west-101`.
+- [ ] **Mise en ligne** : `wrangler deploy` + secrets + URI de redirection Entra → 1er parcours complet via l'UI.
 - [x] Schéma D1 : `migrations/0001_init.sql` — colonnes **neutres** + `provider_job_id`, dates/rôles/groupes ✅.
 - [ ] Réconciliateur complet : `resolveLaunch` (job→server), `active`, drift, retry, **auto-destroy + libération EIP**, extinction nocturne, **idle-stop (CES)**, **sync snapshots**.
 - [ ] Fonctionnel de parité : **snapshots EVS**, **restauration IMS**, expiration auto, planning start/stop, demande groupée formateur.

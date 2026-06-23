@@ -26,8 +26,8 @@
   // Config non secrète. Secrets (HUAWEI_ACCESS_KEY/SECRET_KEY, ENTRA_CLIENT_SECRET,
   // SESSION_SECRET, DATA_ENCRYPTION_KEY, EMAILJS_PRIVATE_KEY) via `wrangler secret put`.
   "vars": {
-    "ALLOWED_EMAIL_DOMAINS": "git.swiss",
-    "ADMIN_EMAILS": "",
+    "ALLOWED_EMAIL_DOMAINS": "satom.ch,git.swiss",
+    "ADMIN_EMAILS": "abderahmane.chaouche@satom.ch",
     "ENTRA_TENANT_ID": "33a7a298-4cf4-4f62-914a-d32bba54de5a",
     "ENTRA_CLIENT_ID": "50cb5c43-7751-42f3-a6c4-6c718e05df1b",
 
@@ -40,7 +40,7 @@
     "HUAWEI_IMAGE_ID": "",
     "HUAWEI_EIP_BANDWIDTH": "5",
 
-    "APP_URL": "",
+    "APP_URL": "https://git-vm-portal-huawei.thomas-prudhomme.workers.dev",
     "MAIL_ENABLED": "false",
     "SCHEDULED_STOP": "true",
     "IDLE_STOP": "true",
@@ -55,6 +55,6 @@
   "triggers": {
     // toutes les 2 min : réconciliation (job→server, active, drift, retry, expiry, idle, snapshots)
     // tous les jours 19:00 UTC : extinction nocturne (garde-fou coûts)
-    "crons": ["*/2 * * * *", "0 19 * * *"]
+    "crons": ["*/2 * * * *"]
   }
 }

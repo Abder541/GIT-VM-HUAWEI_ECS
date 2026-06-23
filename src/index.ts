@@ -1371,20 +1371,20 @@ app.onError((err, c) => {
 
 export default {
   fetch: app.fetch,
-  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    if (event.cron === '0 19 * * *') {
-      ctx.waitUntil(scheduledStop(env));
-    } else {
-      ctx.waitUntil(
-        (async () => {
-          await reconcile(env);
-          await applySchedules(env);
-          await retryFailed(env);
-          await enforceExpiry(env);
-          await enforceIdleStop(env);
-          await syncSnapshots(env);
-        })()
-      );
-    }
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      (async () => {
+        await reconcile(env);
+        await applySchedules(env);
+        await retryFailed(env);
+        await enforceExpiry(env);
+        await enforceIdleStop(env);
+        await syncSnapshots(env);
+        // Garde-fou nocturne fusionné dans l'unique cron (limite Cloudflare de 5 crons/compte) :
+        // déclenché une fois au passage de 19:00 UTC.
+        const now = new Date();
+        if (now.getUTCHours() === 19 && now.getUTCMinutes() < 2) await scheduledStop(env);
+      })()
+    );
   },
 } satisfies ExportedHandler<Env>;

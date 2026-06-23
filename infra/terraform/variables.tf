@@ -41,3 +41,11 @@ variable "rdp_allowed_cidr" {
   type    = string
   default = "0.0.0.0/0"
 }
+
+# Durcissement egress : remplace le « tout autorisé » par une liste blanche
+# (DNS Cloudflare for Families, HTTP/HTTPS, NTP) + default-deny. La VRAIE barrière
+# réseau (un root dans la VM ne peut pas la contourner). false = parité ; true = durci.
+variable "harden_egress" {
+  type    = bool
+  default = false
+}

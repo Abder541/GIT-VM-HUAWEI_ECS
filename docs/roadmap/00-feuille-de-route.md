@@ -34,48 +34,48 @@ Reproduire **tout** le modèle opérationnel AWS sur Huawei (cf. ADR 0003 D1). P
 - [x] **Port complet** : backend (`crypto`/`oidc`/`sentry`/`db`/`email`/`presets`/`index.ts` réconciliateur+routes) **+ SPA `web/`** (typecheck + 8 tests + build OK, 3 commits). App **exécutée en local** (`wrangler dev`) servant le catalogue Huawei `eu-west-101`.
 - [~] **Mise en ligne** : ✅ **déployé** (`git-vm-portal-huawei.thomas-prudhomme.workers.dev`, 1 cron `*/2`, 6 secrets, D1 migrée, prod testée `/healthz` + `/api/presets` + SPA). **Reste (Azure)** : URI de redirection Entra `.../auth/callback` → 1er login + parcours complet.
 - [x] Schéma D1 : `migrations/0001_init.sql` — colonnes **neutres** + `provider_job_id`, dates/rôles/groupes ✅.
-- [ ] Réconciliateur complet : `resolveLaunch` (job→server), `active`, drift, retry, **auto-destroy + libération EIP**, extinction nocturne, **idle-stop (CES)**, **sync snapshots**.
-- [ ] Fonctionnel de parité : **snapshots EVS**, **restauration IMS**, expiration auto, planning start/stop, demande groupée formateur.
-- [ ] Catalogue presets Huawei (flavors/images IMS/EVS, tarifs `eu-west-101`).
-- [ ] Parcours testé de bout en bout : `demande → validation → provisioning → clé SSH/RDP → IP → snapshot → restore → destruction`.
-- **Sortie de phase** : démo de parité complète fonctionnelle sur Huawei.
+- [x] Réconciliateur complet : `resolveLaunch` (job→server), `active`, drift, retry, **auto-destroy + libération EIP**, extinction nocturne, **idle-stop (CES)**, **sync snapshots** ✅.
+- [x] Fonctionnel de parité : **snapshots EVS** ✅, expiration auto ✅, planning start/stop ✅ (+ tests), demande groupée formateur ✅. (**restauration IMS** = conçue, [ADR 0006](../adr/0006-restauration-snapshot-ims.md) — à finaliser, U6.)
+- [x] Catalogue presets Huawei (flavors `s6.*` / images IMS / EVS, tarifs `eu-west-101`) ✅.
+- [x] **Parcours bout en bout testé EN PRODUCTION** : demande → validation → provisioning → IP → SSH `root` → stop/start → destruction (EIP+EVS libérés) ✅.
+- **Sortie de phase** : ✅ **parité atteinte en production**.
 
-## Phase 2 — Sécurité & réseau
+## Phase 2 — Sécurité & réseau — 🟢 conçue ([ADR 0005](../adr/0005-securite-reseau-egress-segmentation.md) · [network/01](../network/01-securite-reseau.md))
 
-- [ ] **Cloudflare Access** (Zero Trust) devant la surface admin.
-- [ ] **WAF + rate limiting** edge.
-- [ ] **Segmentation réseau par classe** (map classe → subnet/SG).
-- [ ] Durcissement SG (pas de `0.0.0.0/0`, plages autorisées).
-- [ ] Rotation AK/SK (runbook) + CTS exploité.
+- [ ] **Cloudflare Access** (Zero Trust) devant `/admin` — conçu (edge), à activer.
+- [ ] **WAF + rate limiting** edge — à activer (rate-limit applicatif 5/h déjà présent).
+- [~] **Segmentation réseau par classe** (map classe → subnet/SG) — **conçue**.
+- [x] **Durcissement SG egress** (liste blanche + default-deny) — **implémenté** (Terraform `hardening.tf`, togglable).
+- [~] Rotation AK/SK ([runbook R1](../operations/01-runbooks.md)) + CTS — **documenté** ; CTS à activer (compte).
 
-## Phase 3 — Observabilité & exploitation
+## Phase 3 — Observabilité — 🟢 conçue ([ADR 0007](../adr/0007-observabilite.md) · [observability/01](../observability/01-metriques-logs-alerting.md))
 
-- [ ] **Cloud Eye (CES)** : métriques ECS, alertes (CPU, VM bloquée en BUILD).
-- [ ] Workers Observability + Sentry (releases, traces).
-- [ ] SLO + dashboard santé.
-- [ ] **Runbooks** : incident provisioning, EIP orpheline, rollback déploiement, rotation secrets.
+- [~] **Cloud Eye (CES)** : CPU **déjà** utilisé (idle) ; alertes (BUILD/ERROR) à brancher.
+- [x] Workers Observability ✅ + Sentry ✅ (opt-in).
+- [x] SLO définis + endpoints `/api/monitoring/*` ✅ ; dashboard Grafana à finaliser.
+- [x] **Runbooks** (incident, orphelin, rollback, rotation, DR, migration) ✅ ([operations/01](../operations/01-runbooks.md)).
 
-## Phase 4 — FinOps
+## Phase 4 — FinOps — 🟢 conçue ([ADR 0008](../adr/0008-finops-couts-garde-fous.md) · [finops/01](../finops/01-modele-couts-et-garde-fous.md))
 
-- [ ] Modèle de coûts ECS + **EIP** + EVS (l'EIP est le piège coût).
-- [ ] Garde-fous : extinction nuit/WE, alerte budget, détection EIP orpheline.
-- [ ] Dashboard coûts par classe/utilisateur (via tags).
-- [ ] Dimensionnement (right-sizing) des flavors.
+- [x] Modèle de coûts ECS + **EIP** + EVS ✅.
+- [x] Garde-fous : nuit ✅, idle ✅, expiry+libération EIP/EVS ✅, **détection orphelins** ✅ (`huawei-orphans.ts`). Alerte budget à brancher.
+- [~] Dashboard coûts par classe/utilisateur — endpoint `cost` ✅, dashboard à finaliser.
+- [x] Right-sizing (catalogue raisonnable) ✅.
 
-## Phase 5 — Résilience (HA / DR)
+## Phase 5 — Résilience (HA / DR) — 🟢 conçue ([ADR 0009](../adr/0009-resilience-ha-dr.md) · [architecture/02](../architecture/02-resilience-ha-dr.md))
 
-- [ ] Multi-AZ (placement des VM sur plusieurs zones).
-- [ ] Sauvegarde/restauration de la D1 (état désiré) + procédure DR.
-- [ ] Plan de reprise documenté + testé.
+- [~] Multi-AZ (placement round-robin) — **conçu**, à activer.
+- [~] Sauvegarde/restauration D1 (Time Travel + export) — **conçu**, à activer.
+- [x] Plan de reprise documenté ([runbook R5](../operations/01-runbooks.md)) — à **tester**.
 
-## Phase 6 — Industrialisation & gouvernance
+## Phase 6 — Industrialisation & gouvernance — 🟢 conçue ([governance/01](../governance/01-nommage-tagging-standards.md) · [ADR 0010](../adr/0010-provisioning-evenementiel-queues-do.md))
 
-- [ ] **IaC Terraform** (provider Huawei) pour les ressources de plateforme.
-- [ ] **Queues + Durable Objects** : provisioning événementiel (plus réactif que le cron).
-- [ ] **Propriété Cloudflare canonique** (compte utilisateur ou dédié projet/orga) — **prérequis au CI/CD** ([ADR 0004](../adr/0004-propriete-cloudflare-et-cicd.md)).
-- [ ] **CI/CD** GitHub → Cloudflare Workers Builds (**après** la migration de compte).
-- [ ] Multi-environnement (preview/prod), multi-région.
-- [ ] Conventions de nommage/tagging formalisées, standards qualité.
+- [x] **IaC Terraform** (réseau socle + durcissement) ✅.
+- [~] **Queues + Durable Objects** (événementiel) — **conçu** ; cron gardé en v1 ([ADR 0010](../adr/0010-provisioning-evenementiel-queues-do.md)).
+- [ ] **Propriété Cloudflare canonique** — **prérequis au CI/CD** ([ADR 0004](../adr/0004-propriete-cloudflare-et-cicd.md)).
+- [ ] **CI/CD** GitHub → Workers Builds (**après** migration de compte).
+- [~] Multi-environnement (preview/prod) — conçu (gouvernance §5).
+- [x] Conventions nommage/tagging/standards ✅.
 
 ---
 

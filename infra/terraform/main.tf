@@ -62,10 +62,13 @@ resource "huaweicloud_networking_secgroup_rule" "rdp" {
   remote_ip_prefix  = var.rdp_allowed_cidr
 }
 
-# Sortant : tout autorisé (le durcissement egress fin = phase réseau avancé).
+# Sortant OUVERT (parité) — actif tant que harden_egress = false.
 resource "huaweicloud_networking_secgroup_rule" "egress_v4" {
+  count             = var.harden_egress ? 0 : 1
   security_group_id = huaweicloud_networking_secgroup.main.id
   direction         = "egress"
   ethertype         = "IPv4"
   remote_ip_prefix  = "0.0.0.0/0"
 }
+# Le durcissement egress (liste blanche + default-deny) vit dans hardening.tf,
+# activé par var.harden_egress. C'est la « vraie barrière » non contournable par un root.

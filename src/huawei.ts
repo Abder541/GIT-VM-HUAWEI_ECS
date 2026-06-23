@@ -50,6 +50,15 @@ function b64(s: string): string {
   return btoa(unescape(encodeURIComponent(s)));
 }
 
+// Huawei renvoie les dates en UTC SANS suffixe 'Z' (ex. "2026-06-23T17:50:00.000000"),
+// ce qui fausse les calculs d'uptime (interprété en heure locale). On normalise en ISO
+// UTC : microsecondes → millisecondes + 'Z'.
+function utcIso(s: string | undefined): string | undefined {
+  if (!s) return undefined;
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) return s;
+  return s.replace(/(\.\d{3})\d+$/, '$1').replace(' ', 'T') + 'Z';
+}
+
 export function huawei(env: Env): CloudProvider {
   const ep = endpoints(env);
   const pid = env.HUAWEI_PROJECT_ID;
@@ -155,7 +164,7 @@ export function huawei(env: Env): CloudProvider {
           if (a['OS-EXT-IPS:type'] === 'floating') publicIp = a.addr;
         }
       }
-      return { state: normalizeState(s.status), publicIp, launchTime: s['OS-SRV-USG:launched_at'] ?? undefined };
+      return { state: normalizeState(s.status), publicIp, launchTime: utcIso(s['OS-SRV-USG:launched_at']) };
     },
 
     async terminateInstance(serverId: string): Promise<void> {

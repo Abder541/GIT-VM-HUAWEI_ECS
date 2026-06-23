@@ -25,6 +25,7 @@ Statut global : **Phase 0 — Architecture-first** (conception avant tout accès
 - [`0001-worker-distinct-et-architecture-first.md`](adr/0001-worker-distinct-et-architecture-first.md)
 - [`0002-client-ecs-direct-vs-sdk.md`](adr/0002-client-ecs-direct-vs-sdk.md)
 - [`0003-reprise-decisions-fondatrices.md`](adr/0003-reprise-decisions-fondatrices.md) — **corrections d'analyse + décisions fondatrices** (parité totale, identité, Terraform, repo).
+- [`0004-propriete-cloudflare-et-cicd.md`](adr/0004-propriete-cloudflare-et-cicd.md) — **propriétaire Cloudflare canonique** (migration avant CI/CD GitHub→Workers Builds).
 
 ### 💻 Code (à la racine du repo)
 - [`src/cloud.ts`](../src/cloud.ts) — **contrat `CloudProvider`** (16 méthodes, provider-neutre).

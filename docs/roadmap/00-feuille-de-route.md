@@ -32,7 +32,7 @@ Reproduire **tout** le modèle opérationnel AWS sur Huawei (cf. ADR 0003 D1). P
 - [x] `src/huawei-sign.ts` — signature AK/SK (WebCrypto) + tests (8 ✓, **validée en live**).
 - [x] `src/huawei.ts` — contrat implémenté ; **cycle de vie validé E2E en live** (keypair → launch→job → resolve → describe IP → listManaged → terminate +EIP+volume, teardown propre). Reste : EVS snapshots, restore IMS (U6), CES idle.
 - [x] **Port complet** : backend (`crypto`/`oidc`/`sentry`/`db`/`email`/`presets`/`index.ts` réconciliateur+routes) **+ SPA `web/`** (typecheck + 8 tests + build OK, 3 commits). App **exécutée en local** (`wrangler dev`) servant le catalogue Huawei `eu-west-101`.
-- [ ] **Mise en ligne** : `wrangler deploy` + secrets + URI de redirection Entra → 1er parcours complet via l'UI.
+- [~] **Mise en ligne** : ✅ **déployé** (`git-vm-portal-huawei.thomas-prudhomme.workers.dev`, 1 cron `*/2`, 6 secrets, D1 migrée, prod testée `/healthz` + `/api/presets` + SPA). **Reste (Azure)** : URI de redirection Entra `.../auth/callback` → 1er login + parcours complet.
 - [x] Schéma D1 : `migrations/0001_init.sql` — colonnes **neutres** + `provider_job_id`, dates/rôles/groupes ✅.
 - [ ] Réconciliateur complet : `resolveLaunch` (job→server), `active`, drift, retry, **auto-destroy + libération EIP**, extinction nocturne, **idle-stop (CES)**, **sync snapshots**.
 - [ ] Fonctionnel de parité : **snapshots EVS**, **restauration IMS**, expiration auto, planning start/stop, demande groupée formateur.
@@ -72,6 +72,8 @@ Reproduire **tout** le modèle opérationnel AWS sur Huawei (cf. ADR 0003 D1). P
 
 - [ ] **IaC Terraform** (provider Huawei) pour les ressources de plateforme.
 - [ ] **Queues + Durable Objects** : provisioning événementiel (plus réactif que le cron).
+- [ ] **Propriété Cloudflare canonique** (compte utilisateur ou dédié projet/orga) — **prérequis au CI/CD** ([ADR 0004](../adr/0004-propriete-cloudflare-et-cicd.md)).
+- [ ] **CI/CD** GitHub → Cloudflare Workers Builds (**après** la migration de compte).
 - [ ] Multi-environnement (preview/prod), multi-région.
 - [ ] Conventions de nommage/tagging formalisées, standards qualité.
 

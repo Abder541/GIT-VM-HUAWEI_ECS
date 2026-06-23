@@ -111,6 +111,7 @@ import {
   notifyUserExtensionApproved,
   notifyUserExtensionRejected,
 } from './email';
+import { zurichNow, shouldRunSchedule } from './schedule';
 
 type Vars = { Variables: { user: SessionUser }; Bindings: Env };
 
@@ -1217,32 +1218,13 @@ async function reconcile(env: Env): Promise<void> {
   }
 }
 
-// Current weekday (1=Mon..7=Sun) and minutes-of-day in Europe/Zurich (DST-aware).
-function zurichNow(): { day: number; minutes: number } {
-  const z = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Zurich' }));
-  return { day: z.getDay() === 0 ? 7 : z.getDay(), minutes: z.getHours() * 60 + z.getMinutes() };
-}
-function parseHHMM(s: string | null): number | null {
-  const m = s ? /^(\d{2}):(\d{2})$/.exec(s) : null;
-  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-}
-// Minute inside [start, stop) — supports windows that wrap past midnight.
-function inWindow(minutes: number, startM: number, stopM: number): boolean {
-  if (startM === stopM) return false;
-  return startM < stopM ? minutes >= startM && minutes < stopM : minutes >= startM || minutes < stopM;
-}
-
-// Enforce per-VM auto start/stop schedules (Europe/Zurich). Desired-state: inside the
-// window on a selected weekday → the VM should run; otherwise → it should be stopped.
+// Plannings auto start/stop par VM (Europe/Zurich). État désiré : dans la fenêtre un jour
+// sélectionné → la VM doit tourner ; sinon → arrêtée. Décision pure dans src/schedule.ts (testée).
 async function applySchedules(env: Env): Promise<void> {
   const { day, minutes } = zurichNow();
   for (const row of await listScheduledVms(env)) {
     if (!row.server_id) continue;
-    const startM = parseHHMM(row.schedule_start);
-    const stopM = parseHHMM(row.schedule_stop);
-    if (startM === null || stopM === null) continue;
-    const days = (row.schedule_days ?? '').split(',').map(Number);
-    const shouldRun = days.includes(day) && inWindow(minutes, startM, stopM);
+    const shouldRun = shouldRunSchedule(day, minutes, row.schedule_days, row.schedule_start, row.schedule_stop);
     try {
       if (shouldRun && row.state === 'stopped') {
         await startInstance(env, row.server_id);

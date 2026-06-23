@@ -4,7 +4,7 @@
 export function reportError(
   dsn: string | undefined,
   err: unknown,
-  ctx: ExecutionContext,
+  ctx: { waitUntil(promise: Promise<unknown>): void },
   extra?: Record<string, unknown>
 ): void {
   if (!dsn) return;

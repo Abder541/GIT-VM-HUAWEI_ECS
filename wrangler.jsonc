@@ -1,0 +1,60 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "git-vm-portal-huawei",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "observability": { "enabled": true },
+
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Les redirections OIDC doivent atteindre le Worker AVANT le fallback SPA.
+    "run_worker_first": ["/auth/*", "/api/*", "/healthz"]
+  },
+
+  // Base D1 DISTINCTE de celle du projet AWS (Worker séparé, règle d'or n°1).
+  // À créer une fois : `npx wrangler d1 create git_vm_portal_huawei`, puis coller l'id.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "git_vm_portal_huawei",
+      "database_id": "bfc2962a-b091-459c-833b-6a384c88f278"
+    }
+  ],
+
+  // Config non secrète. Secrets (HUAWEI_ACCESS_KEY/SECRET_KEY, ENTRA_CLIENT_SECRET,
+  // SESSION_SECRET, DATA_ENCRYPTION_KEY, EMAILJS_PRIVATE_KEY) via `wrangler secret put`.
+  "vars": {
+    "ALLOWED_EMAIL_DOMAINS": "git.swiss",
+    "ADMIN_EMAILS": "",
+    "ENTRA_TENANT_ID": "33a7a298-4cf4-4f62-914a-d32bba54de5a",
+    "ENTRA_CLIENT_ID": "50cb5c43-7751-42f3-a6c4-6c718e05df1b",
+
+    "HUAWEI_REGION": "eu-west-101",
+    "HUAWEI_ENDPOINT_SUFFIX": "myhuaweicloud.eu",
+    "HUAWEI_PROJECT_ID": "85a8db076e4e4e25aa2eeac9e3eb96e0",
+    "HUAWEI_VPC_ID": "3f8f8a3c-b1bf-495e-b91f-c74cbca7137a",
+    "HUAWEI_SUBNET_ID": "62c8cbf4-5299-4e66-a4d1-c5e77bbf2541",
+    "HUAWEI_SECGROUP_ID": "9880c9be-136f-4cf8-8219-3eff57605684",
+    "HUAWEI_IMAGE_ID": "",
+    "HUAWEI_EIP_BANDWIDTH": "5",
+
+    "APP_URL": "",
+    "MAIL_ENABLED": "false",
+    "SCHEDULED_STOP": "true",
+    "IDLE_STOP": "true",
+    "IDLE_STOP_HOURS": "3",
+    "HARDENING": "true",
+    "SENTRY_DSN": "",
+    "EMAILJS_PUBLIC_KEY": "KIKcUV9eCQouP22hT",
+    "EMAILJS_SERVICE_ID": "",
+    "EMAILJS_TEMPLATE_ID": ""
+  },
+
+  "triggers": {
+    // toutes les 2 min : réconciliation (job→server, active, drift, retry, expiry, idle, snapshots)
+    // tous les jours 19:00 UTC : extinction nocturne (garde-fou coûts)
+    "crons": ["*/2 * * * *", "0 19 * * *"]
+  }
+}

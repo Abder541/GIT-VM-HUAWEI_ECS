@@ -34,8 +34,8 @@ function endpoints(env: Env) {
   };
 }
 
-// État Huawei → vocabulaire portail (NORMALIZED_STATES dans cloud.ts).
-function normalizeState(s: string | undefined): string {
+// État Huawei → vocabulaire portail (NORMALIZED_STATES dans cloud.ts). Exporté pour test unitaire.
+export function normalizeState(s: string | undefined): string {
   switch ((s || '').toUpperCase()) {
     case 'ACTIVE': return 'running';
     case 'BUILD': case 'REBOOT': case 'HARD_REBOOT': case 'RESIZE': case 'VERIFY_RESIZE': return 'pending';
@@ -52,8 +52,8 @@ function b64(s: string): string {
 
 // Huawei renvoie les dates en UTC SANS suffixe 'Z' (ex. "2026-06-23T17:50:00.000000"),
 // ce qui fausse les calculs d'uptime (interprété en heure locale). On normalise en ISO
-// UTC : microsecondes → millisecondes + 'Z'.
-function utcIso(s: string | undefined): string | undefined {
+// UTC : microsecondes → millisecondes + 'Z'. Exporté pour test unitaire.
+export function utcIso(s: string | undefined): string | undefined {
   if (!s) return undefined;
   if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) return s;
   return s.replace(/(\.\d{3})\d+$/, '$1').replace(' ', 'T') + 'Z';

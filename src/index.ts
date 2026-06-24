@@ -100,9 +100,10 @@ const stopInstance = (env: Env, serverId: string) => huawei(env).stopInstance(se
 const rebootInstance = (env: Env, serverId: string) => huawei(env).rebootInstance(serverId);
 const describeRootVolume = (env: Env, serverId: string) => huawei(env).describeRootVolume(serverId);
 
-// Restore GATÉ au niveau du compte (real-name auth requise pour whole-image, cf.
-// docs/design-cbr-restore.md). Les pipelines IMS (new-VM) et rollback EVS (en place)
-// restent DORMANTS : flag à repasser à true une fois la real-name auth validée.
+// Restore = LEGACY / DEPRECATED (remplacé par CBR — cf. docs/design-cbr-restore.md).
+// GATÉ au niveau du compte (real-name auth requise). Ce flag UNIQUE désactive TOUS les flux actifs
+// de restore (provisionRequest `isRestore` + route rollback). Les pipelines IMS (new-VM) et rollback
+// EVS (en place) restent DORMANTS/legacy, inactifs. Repasser à true UNIQUEMENT après bascule CBR.
 const RESTORE_ENABLED = false;
 const createSnapshot = (env: Env, volumeId: string, description: string) => huawei(env).createSnapshot(volumeId, description);
 const describeSnapshot = (env: Env, snapshotId: string) => huawei(env).describeSnapshot(snapshotId);
@@ -1205,7 +1206,8 @@ async function reconcile(env: Env): Promise<void> {
   const rows = await listActiveVms(env);
   for (const row of rows) {
     try {
-      // ---- Pré-vol RESTAURATION (additif ; ignoré si restore_step est NULL = VM normale) ----
+      // ---- Pré-vol RESTAURATION — LEGACY/DEPRECATED (IMS, remplacé par CBR) ----
+      // INACTIF : restore_step n'est jamais positionné (entrée gated RESTORE_ENABLED=false). Dormant.
       if (row.restore_step === 'volume') {
         const volumeId = await c.resolveJob(row.provider_job_id!, 'evs');
         if (!volumeId) continue; // volume en cours de création
@@ -1239,7 +1241,8 @@ async function reconcile(env: Env): Promise<void> {
         continue;
       }
 
-      // ---- Pré-vol ROLLBACK EN PLACE (additif ; ignoré si rollback_step est NULL) ----
+      // ---- Pré-vol ROLLBACK EN PLACE — LEGACY/DEPRECATED (EVS, remplacé par CBR) ----
+      // INACTIF : rollback_step n'est jamais positionné (route gated RESTORE_ENABLED=false). Dormant.
       // Machine à états : stopping → rollingback → starting, conduite par le réconciliateur.
       if (row.rollback_step) {
         const serverId = row.server_id;

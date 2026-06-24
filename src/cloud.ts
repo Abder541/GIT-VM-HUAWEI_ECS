@@ -139,17 +139,21 @@ export interface CloudProvider {
   createSnapshot(volumeId: string, description: string): Promise<string>;
   describeSnapshot(snapshotId: string): Promise<SnapshotState>;
   deleteSnapshot(snapshotId: string): Promise<void>;
-  /**
-   * Restaure (rollback) un snapshot sur son volume SOURCE — restauration EN PLACE.
-   * La VM doit être arrêtée (volume non monté). N'utilise que des droits EVS.
-   * Alternative au restore « nouvelle VM » (CBR) quand l'identité n'a pas les droits CBR.
-   */
+  // ===== LEGACY / DEPRECATED — remplacé par CBR (cf. docs/design-cbr-restore.md) ============
+  // Deux approches de restore PROUVÉES NON-VIABLES sur le compte (IMS image-from-volume →
+  // « charged image cannot be exported » ; whole-image → IMG.0026 real-name ; rollback EVS →
+  // volume « in-use »). Conservées comme LEGACY, INACTIVES : gated `RESTORE_ENABLED=false`,
+  // aucun flux actif ne les appelle (prouvé : seuls appelants = branches gated). Ne pas réutiliser ;
+  // à retirer/remplacer une fois CBR implémenté (real-name auth gated).
+  /** @deprecated LEGACY — rollback EVS en place (bloqué « in-use »). Remplacé par CBR. Inactif (gated). */
   rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void>;
-  /** Statut EVS brut du volume (available | rollbacking | error_rollbacking…) — suivi du rollback en place. */
+  /** @deprecated LEGACY — suivi du rollback EVS. Remplacé par CBR. Inactif (gated). */
   getVolumeStatus(volumeId: string): Promise<string>;
-  // ---- Restauration async (EVS volume → IMS image → launch normal) -------
+  /** @deprecated LEGACY — IMS restore : volume depuis snapshot. Remplacé par CBR. Inactif (gated). */
   createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string>; // → jobId
+  /** @deprecated LEGACY — IMS restore : image depuis volume (bloqué charged-image). Remplacé par CBR. */
   createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string>; // → jobId
+  // ===== fin LEGACY =====
   deleteVolume(volumeId: string): Promise<void>;
   deleteImage(imageId: string): Promise<void>;
   /** Résout un job EVS/IMS → id de ressource (volume_id/image_id) ; null si en cours. */

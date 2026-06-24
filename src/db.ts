@@ -472,6 +472,10 @@ export async function setServerId(env: Env, requestId: number, serverId: string)
   await env.DB.prepare(`UPDATE vms SET server_id = ?2 WHERE request_id = ?1`).bind(requestId, serverId).run();
 }
 
+// ===== LEGACY / DEPRECATED — restore IMS (restoreTo*) + rollback EVS (startRollback/…) =====
+// Remplacé par CBR (cf. docs/design-cbr-restore.md). Helpers d'état INACTIFS : `restore_step` et
+// `rollback_step` ne sont jamais positionnés par un flux actif (entrées gated RESTORE_ENABLED=false).
+// Conservés comme legacy ; NE PAS réutiliser ; à retirer/remplacer quand CBR sera implémenté.
 // ---- Restauration : transitions du pré-vol (pilotées par le réconciliateur) ----
 // Volume prêt → étape image (provider_job_id = job de création d'image).
 export async function restoreToImage(env: Env, requestId: number, volumeId: string, imageJobId: string): Promise<void> {

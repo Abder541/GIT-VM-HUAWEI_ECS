@@ -234,6 +234,12 @@ export function huawei(env: Env): CloudProvider {
       await req(ep.evs, 'DELETE', `/v2/${pid}/cloudsnapshots/${snapshotId}`).catch(() => {});
     },
 
+    // ===== LEGACY / DEPRECATED (remplacé par CBR — cf. docs/design-cbr-restore.md) =====
+    // rollbackSnapshot / getVolumeStatus (rollback EVS en place) et createVolumeFromSnapshot /
+    // createImageFromVolume (IMS restore « nouvelle VM ») : approches prouvées NON-VIABLES sur le
+    // compte (in-use ; charged-image ; IMG.0026 real-name). INACTIVES (gated RESTORE_ENABLED=false,
+    // aucun flux actif). Conservées comme legacy jusqu'à l'implémentation CBR. NE PAS réutiliser.
+
     // Restauration EN PLACE : rollback du snapshot sur son volume source (VM stoppée
     // → volume non monté). Asynchrone côté Huawei (volume passe en 'rollbacking' →
     // 'available') ; le suivi se fait via le statut du volume. Droits EVS uniquement.

@@ -160,6 +160,8 @@ Justification : image-depuis-volume bloquée (lignée gold). **CBR = voie native
 >
 > ❌ **VALIDATION LIVE BLOQUÉE (2026-06-24)** : `POST cbr/v3/{pid}/vaults → 403 "Policy doesn't allow cbr:vaults:create"`. L'identité AK/SK a le **read CBR** (GET = 200) mais **pas le write** → la clé `GIT-VM` n'est PAS réellement full-access (CBR manquant).
 > ▶ **Action requise (console/IAM, toi ou l'IT client)** : attacher **CBR FullAccess** (ou policy custom `cbr:*`) à l'utilisateur IAM de la clé. Puis re-run `scripts/tmp-cbr-e2e.ts` → ça révélera les formes d'API (vault/checkpoint/backup/whole-image) pour écrire le provider CBR.
+>
+> ✅ **Repli SANS grant ajouté (2026-06-24)** : provider `rollbackSnapshot(snapshotId, volumeId)` = **restore EN PLACE** (rollback EVS sur le volume source, VM stoppée). N'utilise QUE des droits EVS déjà acquis → fonctionne sans CBR ni market. Couvre « restaurer ma VM à un état antérieur » (≠ « nouvelle VM depuis backup » = CBR). Validation : `scripts/tmp-evs-rollback.ts` (à lancer). Reste = câblage réconciliateur + bouton UI « Restaurer » (SnapshotPanel) après validation live.
 
 **Design retenu (CBR backup → whole-image → launch)** :
 1. **Vault** : créer/réutiliser un vault CBR (`POST cbr/v3/{pid}/vaults`, type `backup`, ressource = serveur).

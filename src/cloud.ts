@@ -139,6 +139,12 @@ export interface CloudProvider {
   createSnapshot(volumeId: string, description: string): Promise<string>;
   describeSnapshot(snapshotId: string): Promise<SnapshotState>;
   deleteSnapshot(snapshotId: string): Promise<void>;
+  /**
+   * Restaure (rollback) un snapshot sur son volume SOURCE — restauration EN PLACE.
+   * La VM doit être arrêtée (volume non monté). N'utilise que des droits EVS.
+   * Alternative au restore « nouvelle VM » (CBR) quand l'identité n'a pas les droits CBR.
+   */
+  rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void>;
   /** Enregistre une image (IMS) depuis un snapshot pour relancer une VM (restore). */
   registerImageFromSnapshot(
     name: string,

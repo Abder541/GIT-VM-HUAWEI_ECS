@@ -234,6 +234,15 @@ export function huawei(env: Env): CloudProvider {
       await req(ep.evs, 'DELETE', `/v2/${pid}/cloudsnapshots/${snapshotId}`).catch(() => {});
     },
 
+    // Restauration EN PLACE : rollback du snapshot sur son volume source (VM stoppée
+    // → volume non monté). Asynchrone côté Huawei (volume passe en 'rollbacking' →
+    // 'available') ; le suivi se fait via le statut du volume. Droits EVS uniquement.
+    async rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void> {
+      await req(ep.evs, 'POST', `/v2/${pid}/cloudsnapshots/${snapshotId}/rollback`, {
+        body: { rollback: { volume_id: volumeId } },
+      });
+    },
+
     // ---- Restauration (IMS) ----------------------------------------------
     // U6 : le chemin « snapshot → image relançable » diffère d'AWS (pas de
     // RegisterImage direct depuis un snapshot EVS). Approche Huawei : créer un

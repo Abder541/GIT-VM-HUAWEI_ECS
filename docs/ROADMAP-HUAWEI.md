@@ -122,7 +122,8 @@ image_id réels capturés (scan 2026-06-24) à ajouter : Debian 11 `f2ca2562…`
 ## 4. Phase 2 — Windows (ton exemple) 🔶 code fait, validation live à venir
 
 > ✅ **2026-06-24** : OS `windows2019` ajouté (`presets.ts`, image market `e5233d7b…`, RDP, `Administrator`). Le provider gère **déjà** Windows (mot de passe via user_data `<powershell>`, base64, `admin_password` AES-GCM). Le SG ouvre **déjà** 3389 (`infra/terraform/main.tf` rule `rdp`). Typecheck+tests verts.
-> ⬜ **Reste = VALIDATION LIVE** (1 VM Windows, ~cents + licence/h) : souscription image market OK ? RDP joignable ? mot de passe déchiffré OK ? cours Chocolatey installés ? min_disk réel ?
+> ❌ **VALIDATION LIVE BLOQUÉE (2026-06-24)** : `POST cloudservers → 400 "You are forbidden to use market image e5233d7b…"`. L'image market n'est **pas souscrite** sur le compte. Preset passé en `hidden`.
+> ▶ **Action requise (console, toi)** : Marketplace Huawei → s'abonner à une image **Windows Server** (vérifier le modèle de coût licence), récupérer l'`image_id` souscrit → le mettre dans `windows2019.image` + retirer `hidden`. Puis re-run `scripts/tmp-win-e2e.ts`.
 
 Constat : Windows existe en images **MARKET** EU (ex. `Windows Server 2019 Standard …eu`, `__productcode` présent = **payant**, D5). Pas d'image gold gratuite.
 
@@ -156,6 +157,9 @@ Outil : étendre `scripts/huawei-e2e.ts` + `huawei-stabilize.ts`.
 Justification : image-depuis-volume bloquée (lignée gold). **CBR = voie native Huawei.**
 
 > ✅ **Étude read-only faite (2026-06-24)** : CBR dispo sur EU (`cbr.eu-west-101.…/v3/{pid}/vaults|backups|policies` = 200, `defaultPolicy` backup 30j présente). `ims …/v1/cloudimages/wholeimages/action` existe (400 sur body vide = endpoint OK, pas 404). CSBS absent (404) → CBR est le bon service.
+>
+> ❌ **VALIDATION LIVE BLOQUÉE (2026-06-24)** : `POST cbr/v3/{pid}/vaults → 403 "Policy doesn't allow cbr:vaults:create"`. L'identité AK/SK a le **read CBR** (GET = 200) mais **pas le write** → la clé `GIT-VM` n'est PAS réellement full-access (CBR manquant).
+> ▶ **Action requise (console/IAM, toi ou l'IT client)** : attacher **CBR FullAccess** (ou policy custom `cbr:*`) à l'utilisateur IAM de la clé. Puis re-run `scripts/tmp-cbr-e2e.ts` → ça révélera les formes d'API (vault/checkpoint/backup/whole-image) pour écrire le provider CBR.
 
 **Design retenu (CBR backup → whole-image → launch)** :
 1. **Vault** : créer/réutiliser un vault CBR (`POST cbr/v3/{pid}/vaults`, type `backup`, ressource = serveur).

@@ -84,11 +84,12 @@ export const OS: Record<string, OsPreset> = {
   alma8: { id: 'alma8', label: 'AlmaLinux 8', family: 'alma', image: '4a74c7b7-e964-4766-9e6e-187990f8d7ea', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 8.' },
   rocky9: { id: 'rocky9', label: 'Rocky Linux 9', family: 'rocky', image: '48ff5b63-df3d-4719-9d9b-93465ae091d4', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 9 (successeur de CentOS).' },
   rocky8: { id: 'rocky8', label: 'Rocky Linux 8', family: 'rocky', image: '5542ea9f-adb4-4237-82e7-4b92a84b15e2', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 8.' },
-  // Windows : aucune image gold gratuite sur le site EU → image MARKET (payante, licence
-  // incluse — décision D5 acceptée). Connexion RDP ; mot de passe Administrator posé au 1er
-  // boot via user_data (Cloudbase-init `<powershell>`), déjà géré par provisionRequest.
-  // ⚠️ À VALIDER LIVE : souscription de l'image market + min_disk réel (≥40).
-  windows2019: { id: 'windows2019', label: 'Windows Server 2019', family: 'windows', image: 'e5233d7b-d432-4506-9149-ee25567daa05', sshUser: 'Administrator', connect: 'rdp', minStorageGb: 40, description: 'Windows Server 2019 (RDP). Licence incluse (image payante).' },
+  // Windows : aucune image gold gratuite sur le site EU → image MARKET (payante). Connexion
+  // RDP ; mot de passe Administrator posé au 1er boot via user_data (Cloudbase-init), déjà géré
+  // par provisionRequest. ⚠️ MASQUÉ (hidden) : l'image market doit d'abord être SOUSCRITE dans
+  // le Marketplace Huawei (sinon « 400 forbidden to use market image », confirmé en live).
+  // Dé-masquer après souscription + validation live, et mettre l'image_id souscrit ici.
+  windows2019: { id: 'windows2019', label: 'Windows Server 2019', family: 'windows', image: 'e5233d7b-d432-4506-9149-ee25567daa05', sshUser: 'Administrator', connect: 'rdp', minStorageGb: 40, hidden: true, description: 'Windows Server 2019 (RDP). Licence incluse (image payante).' },
 };
 
 // Bundles d'outils par cours, préinstallés via cloud-init au premier démarrage.

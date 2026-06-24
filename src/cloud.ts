@@ -145,6 +145,14 @@ export interface CloudProvider {
     architecture: string
   ): Promise<string>;
 
+  // ---- Restauration async (EVS volume → IMS image → launch normal) -------
+  createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string>; // → jobId
+  createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string>; // → jobId
+  deleteVolume(volumeId: string): Promise<void>;
+  deleteImage(imageId: string): Promise<void>;
+  /** Résout un job EVS/IMS → id de ressource (volume_id/image_id) ; null si en cours. */
+  resolveJob(jobId: string, service: 'evs' | 'ims'): Promise<string | null>;
+
   // ---- Métriques (Huawei Cloud Eye / CES) pour l'arrêt sur inactivité -----
   maxCpuOverWindow(serverId: string, minutes: number): Promise<CpuStat | null>;
 }

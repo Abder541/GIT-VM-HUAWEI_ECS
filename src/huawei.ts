@@ -255,6 +255,50 @@ export function huawei(env: Env): CloudProvider {
       return imageId;
     },
 
+    // ---- Restauration async (EVS volume → IMS image → launch normal) -----
+    // Piloté par le réconciliateur (chaque create → job_id ; resolveJob résout job → id).
+    // ⚠️ U6 : forme exacte des réponses EVS/IMS à confirmer en live ; isolé ici.
+    async createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string> {
+      const j = await req(ep.evs, 'POST', `/v2/${pid}/cloudvolumes`, {
+        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', availability_zone: availabilityZone, name: `gitvm-restore-vol-${Date.now()}` } },
+      });
+      const jobId = j?.job_id;
+      if (!jobId) throw new Error('EVS create-volume: pas de job_id');
+      return jobId;
+    },
+
+    async createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string> {
+      const j = await req(ep.ims, 'POST', `/v2/cloudimages/action`, {
+        body: { name: name.slice(0, 64), volume_id: volumeId, os_version: osVersion },
+      });
+      const jobId = j?.job_id;
+      if (!jobId) throw new Error('IMS create-image: pas de job_id');
+      return jobId;
+    },
+
+    async deleteVolume(volumeId: string): Promise<void> {
+      await req(ep.evs, 'DELETE', `/v2/${pid}/cloudvolumes/${volumeId}`).catch(() => {});
+    },
+
+    async deleteImage(imageId: string): Promise<void> {
+      await req(ep.ims, 'DELETE', `/v2/cloudimages/${imageId}`).catch(() => {});
+    },
+
+    async resolveJob(jobId: string, service: 'evs' | 'ims'): Promise<string | null> {
+      const host = service === 'evs' ? ep.evs : ep.ims;
+      const j = await req(host, 'GET', `/v1/${pid}/jobs/${jobId}`);
+      const status = j?.status;
+      if (status === 'SUCCESS') {
+        const ent = j?.entities ?? {};
+        const sub = ent?.sub_jobs?.[0]?.entities ?? {};
+        const id = service === 'evs' ? (ent.volume_id ?? sub.volume_id) : (ent.image_id ?? sub.image_id);
+        if (!id) throw new Error(`Job ${service} SUCCESS mais id introuvable`);
+        return id;
+      }
+      if (status === 'FAIL') throw new Error(`Job ${service} échoué: ${j?.fail_reason ?? 'raison inconnue'}`);
+      return null; // RUNNING / INIT
+    },
+
     // ---- Métriques (Cloud Eye / CES) -------------------------------------
     async maxCpuOverWindow(serverId: string, minutes: number): Promise<CpuStat | null> {
       const to = Date.now();

@@ -36,6 +36,9 @@ import {
   setRequestStatus,
   createVm,
   setServerId,
+  restoreToImage,
+  restoreToLaunch,
+  clearRestore,
   updateVm,
   deleteVm,
   clearCourseReady,
@@ -260,15 +263,22 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     }
   }
 
-  // Restauration : enregistre une image IMS depuis le snapshot et lance dessus.
-  let imageId = os.image;
-  let sizeGb = storage.sizeGb;
+  // Restauration : flux ASYNC (volume → image → launch) piloté par le réconciliateur.
+  // On crée le VOLUME depuis le snapshot, on stocke la VM en étape 'volume', puis on REND
+  // la main (le réconciliateur enchaîne image → launch). Le flux VM normal ci-dessous est inchangé.
   if (isRestore) {
+    const az = env.HUAWEI_AZ;
+    if (!az) throw new Error('Restauration indisponible : variable HUAWEI_AZ requise (AZ du volume)');
     const snap = await getSnapshot(env, req.restore_snapshot_id, req.user_email);
     if (!snap?.snapshot_id || snap.status !== 'completed') throw new Error('snapshot not ready for restore');
-    imageId = await c.registerImageFromSnapshot(`gitvm-restore-${req.id}`, snap.snapshot_id, snap.root_device ?? '/dev/vda', snap.architecture ?? 'x86_64');
-    sizeGb = Math.max(storage.sizeGb, snap.size_gb ?? 0);
+    const kpR = await c.createKeyPair(req.id, isWindows ? 'rsa' : 'ed25519');
+    const encKeyR = await encryptSecret(dataKey(env), kpR.privateKey);
+    const volJob = await c.createVolumeFromSnapshot(snap.snapshot_id, az);
+    await createVm(env, req.id, volJob, kpR.keyName, encKeyR, os.sshUser, os.connect, encPassword, 'volume');
+    return volJob;
   }
+  const imageId = os.image;
+  const sizeGb = storage.sizeGb;
 
   const kp = await c.createKeyPair(req.id, isWindows ? 'rsa' : 'ed25519');
   const encKey = await encryptSecret(dataKey(env), kp.privateKey);
@@ -1140,6 +1150,15 @@ app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 // ---- Scheduled: reconcile state + scheduled stop ------------------------
 // Reconcile DB against AWS: promote provisioning->active, sync running/stopped
 // state, and detect drift (instances terminated outside the portal).
+// OS du snapshot → os_version IMS (pour la création d'image de restauration).
+function imsOsVersion(osId: string | null | undefined): string {
+  const fam = osId ? OS[osId]?.family : undefined;
+  if (fam === 'ubuntu') return 'Ubuntu';
+  if (fam === 'debian') return 'Debian';
+  if (fam === 'windows') return 'Windows';
+  return 'Other Linux(64 bit)';
+}
+
 async function reconcile(env: Env): Promise<void> {
   const c = huawei(env);
   let managed: Record<string, string>;
@@ -1151,6 +1170,39 @@ async function reconcile(env: Env): Promise<void> {
   const rows = await listActiveVms(env);
   for (const row of rows) {
     try {
+      // ---- Pré-vol RESTAURATION (additif ; ignoré si restore_step est NULL = VM normale) ----
+      if (row.restore_step === 'volume') {
+        const volumeId = await c.resolveJob(row.provider_job_id!, 'evs');
+        if (!volumeId) continue; // volume en cours de création
+        const r = await getRequest(env, row.id);
+        if (!r) throw new Error('restore: demande introuvable');
+        const imgJob = await c.createImageFromVolume(`gitvm-restore-${row.id}`, volumeId, imsOsVersion(r.os));
+        await restoreToImage(env, row.id, volumeId, imgJob);
+        await audit(env, 'system', 'restore.volume.ready', `req:${row.id}`, volumeId);
+        continue;
+      }
+      if (row.restore_step === 'image') {
+        const imageId = await c.resolveJob(row.provider_job_id!, 'ims');
+        if (!imageId) continue; // image en cours de création
+        if (row.restore_volume_id) await c.deleteVolume(row.restore_volume_id); // anti-orphelin : volume devenu inutile
+        const r = await getRequest(env, row.id);
+        if (!r) throw new Error('restore: demande introuvable');
+        const perf = PERF[r.preset];
+        const storage = STORAGE[r.storage ?? ''];
+        if (!perf || !storage) throw new Error('restore: preset/storage invalide');
+        const h = await c.launchInstance({
+          requestId: row.id,
+          keyName: row.ssh_key_name ?? `vm-portal-req-${row.id}`,
+          flavor: perf.flavor,
+          imageId,
+          sizeGb: storage.sizeGb,
+          nameTag: r.name ? `${r.name}.${r.user_email.split('@')[0]}` : null,
+        });
+        await restoreToLaunch(env, row.id, imageId, h.jobId);
+        await audit(env, 'system', 'restore.image.ready', `req:${row.id}`, imageId);
+        continue;
+      }
+
       // Modèle asynchrone : résoudre job_id → server_id s'il n'est pas encore connu.
       if (!row.server_id) {
         if (!row.provider_job_id) continue;
@@ -1158,6 +1210,11 @@ async function reconcile(env: Env): Promise<void> {
         if (!resolved) continue; // job encore en cours
         await setServerId(env, row.id, resolved);
         await audit(env, 'system', 'vm.job.resolved', `req:${row.id}`, resolved);
+        // Restauration : VM démarrée → image IMS transitoire inutile (anti-orphelin).
+        if (row.restore_step === 'launch') {
+          if (row.restore_image_id) await c.deleteImage(row.restore_image_id);
+          await clearRestore(env, row.id);
+        }
         row.server_id = resolved;
       }
       const serverId = row.server_id;
@@ -1213,6 +1270,13 @@ async function reconcile(env: Env): Promise<void> {
         }
       }
     } catch (e: any) {
+      // Restauration : nettoyage des ressources transitoires en cas d'échec (anti-orphelin).
+      if (row.restore_step) {
+        if (row.restore_volume_id) await c.deleteVolume(row.restore_volume_id).catch(() => {});
+        if (row.restore_image_id) await c.deleteImage(row.restore_image_id).catch(() => {});
+        await setRequestStatus(env, row.id, 'failed', undefined, `restore: ${e.message}`).catch(() => {});
+        await clearRestore(env, row.id).catch(() => {});
+      }
       await audit(env, 'system', 'vm.reconcile.error', `req:${row.id}`, e.message);
     }
   }

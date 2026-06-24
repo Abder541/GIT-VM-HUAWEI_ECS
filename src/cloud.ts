@@ -38,6 +38,8 @@ export interface LaunchParams {
   imageId: string;
   /** Taille du volume racine EVS, en Go. */
   sizeGb: number;
+  /** Type de volume EVS racine (GPSSD / SSD / SAS…). Défaut implémentation : GPSSD. */
+  volumetype?: string;
   /** Script de bootstrap au 1er démarrage (cloud-init Linux / EC2Launch-like Windows). */
   userData?: string;
   /** Nom lisible → tag `Name` de la VM (repli : `vm-portal-req-<id>`). */

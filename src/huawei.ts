@@ -120,7 +120,7 @@ export function huawei(env: Env): CloudProvider {
         flavorRef: p.flavor,
         vpcid: env.HUAWEI_VPC_ID,
         nics: [{ subnet_id: env.HUAWEI_SUBNET_ID }],
-        root_volume: { volumetype: 'GPSSD', size: p.sizeGb },
+        root_volume: { volumetype: p.volumetype || 'GPSSD', size: p.sizeGb },
         security_groups: [{ id: env.HUAWEI_SECGROUP_ID }],
         key_name: p.keyName,
         count: 1,
@@ -259,8 +259,13 @@ export function huawei(env: Env): CloudProvider {
     // Piloté par le réconciliateur (chaque create → job_id ; resolveJob résout job → id).
     // ⚠️ U6 : forme exacte des réponses EVS/IMS à confirmer en live ; isolé ici.
     async createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string> {
+      // EVS exige `size` (≥ taille du snapshot) même pour une création depuis snapshot,
+      // sinon « 400: invalid volume size! » (confirmé en live). On lit la taille du snapshot.
+      const s = await req(ep.evs, 'GET', `/v2/${pid}/cloudsnapshots/${snapshotId}`);
+      const size = s?.snapshot?.size;
+      if (!size) throw new Error('EVS create-volume: taille du snapshot introuvable');
       const j = await req(ep.evs, 'POST', `/v2/${pid}/cloudvolumes`, {
-        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', availability_zone: availabilityZone, name: `gitvm-restore-vol-${Date.now()}` } },
+        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', availability_zone: availabilityZone, size, name: `gitvm-restore-vol-${Date.now()}` } },
       });
       const jobId = j?.job_id;
       if (!jobId) throw new Error('EVS create-volume: pas de job_id');

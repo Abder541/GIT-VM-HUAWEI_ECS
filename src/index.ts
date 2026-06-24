@@ -289,6 +289,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     flavor: perf.flavor,
     imageId,
     sizeGb,
+    volumetype: storage.volumetype,
     userData,
     nameTag: req.name ? `${req.name}.${req.user_email.split('@')[0]}` : null,
   });
@@ -1196,6 +1197,7 @@ async function reconcile(env: Env): Promise<void> {
           flavor: perf.flavor,
           imageId,
           sizeGb: storage.sizeGb,
+          volumetype: storage.volumetype,
           nameTag: r.name ? `${r.name}.${r.user_email.split('@')[0]}` : null,
         });
         await restoreToLaunch(env, row.id, imageId, h.jobId);

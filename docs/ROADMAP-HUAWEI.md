@@ -141,14 +141,16 @@ Risque : surcoût ; format user_data Windows ; temps de boot long (mot de passe 
 
 ## 5. Phase 3 — Validation parité E2E 🔶
 
-> ✅ **Audit code parité (2026-06-24)** : réconciliateur + cycle de vie (`reconcile`, `applySchedules`,
-> `enforceExpiry`+snapshot-on-delete, `enforceIdleStop`, `retryFailed`, `scheduledStop`/garde nuit,
-> `scheduled()`) = **portage FIDÈLE** d'AWS (comparaison directe réf. AWS), nommage neutralisé
-> (0 résidu `aws_*`), ordre pipeline conforme. **Aucun bug de portage.**
-> 🔎 **Relevé (arbitrage produit, NON modifié — identique à AWS)** : `listRunningVmsForIdle` n'exclut pas
-> les VM à planning actif → l'idle-stop peut arrêter une VM planifiée que `applySchedules` relance
-> (oscillation lente + notifs « idle_stopped » parasites). Correctif simple si voulu :
-> `AND r.schedule_enabled = 0` dans la requête (⚠️ diverge d'AWS). **Décision produit requise.**
+> 🔎 **Audit code parité (2026-06-24) — VÉRIFICATION PARTIELLE (hypothèse non prouvée E2E)** :
+> méthode = lecture des fonctions (`reconcile`, `applySchedules`, `enforceExpiry`+snapshot-on-delete,
+> `enforceIdleStop`, `retryFailed`, `scheduledStop`/garde nuit, `scheduled()`) + **comparaison ponctuelle**
+> avec la réf. AWS (preuve faite sur `listRunningVmsForIdle`).
+> **PROUVÉ** (observable) : (1) `grep aws_` = 0 résidu de colonne `aws_*` dans `src/` (hors commentaire) ;
+> (2) `listRunningVmsForIdle` identique à AWS ; (3) ordre du pipeline lisible dans `scheduled()`.
+> **NON prouvé** : exhaustivité ligne-à-ligne de toutes les fonctions ; **comportement réel = aucun test
+> E2E** (gated, VM facturables). → Conclusion = *hypothèse* de portage cohérent, à valider en live.
+> ✅ **Corrigé (2026-06-24)** : `listRunningVmsForIdle` exclut désormais les VM à planning actif
+> (`AND r.schedule_enabled = 0`) → fin de l'oscillation idle-stop vs planning (amélioration vs AWS, arbitrage validé).
 > ⬜ Reste = **validation E2E LIVE** (VM facturables → gated) :
 
 Re-tester en réel (parité AGENTS.md) sur le cron unique `*/2`:

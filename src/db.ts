@@ -489,6 +489,19 @@ export async function clearRestore(env: Env, requestId: number): Promise<void> {
     .bind(requestId).run();
 }
 
+// --- Rollback EN PLACE (restauration d'une VM vers un snapshot EVS) ---
+export async function startRollback(env: Env, requestId: number, snapshotId: string, volumeId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = 'stopping', rollback_snapshot_id = ?2, rollback_volume_id = ?3 WHERE request_id = ?1`)
+    .bind(requestId, snapshotId, volumeId).run();
+}
+export async function setRollbackStep(env: Env, requestId: number, step: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = ?2 WHERE request_id = ?1`).bind(requestId, step).run();
+}
+export async function clearRollback(env: Env, requestId: number): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = NULL, rollback_snapshot_id = NULL, rollback_volume_id = NULL WHERE request_id = ?1`)
+    .bind(requestId).run();
+}
+
 export async function getKeyForRequest(
   env: Env,
   requestId: number
@@ -537,13 +550,18 @@ export interface ActiveVm {
   restore_step: string | null;
   restore_volume_id: string | null;
   restore_image_id: string | null;
+  // rollback EN PLACE (NULL pour les VM normales)
+  rollback_step: string | null;
+  rollback_snapshot_id: string | null;
+  rollback_volume_id: string | null;
 }
 
 // Demandes ayant (ou en cours d'obtention d') une VM — pour reconcile / scheduled stop.
 export async function listActiveVms(env: Env): Promise<ActiveVm[]> {
   const res = await env.DB.prepare(
     `SELECT r.id, r.status, r.user_email, v.server_id, v.provider_job_id, v.ssh_user, v.ssh_key_name, v.state, v.connect_method,
-            r.schedule_enabled, v.restore_step, v.restore_volume_id, v.restore_image_id
+            r.schedule_enabled, v.restore_step, v.restore_volume_id, v.restore_image_id,
+            v.rollback_step, v.rollback_snapshot_id, v.rollback_volume_id
        FROM vm_requests r JOIN vms v ON v.request_id = r.id
       WHERE r.status IN ('provisioning', 'active')`
   ).all<ActiveVm>();

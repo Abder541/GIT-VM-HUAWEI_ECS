@@ -145,14 +145,8 @@ export interface CloudProvider {
    * Alternative au restore « nouvelle VM » (CBR) quand l'identité n'a pas les droits CBR.
    */
   rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void>;
-  /** Enregistre une image (IMS) depuis un snapshot pour relancer une VM (restore). */
-  registerImageFromSnapshot(
-    name: string,
-    snapshotId: string,
-    rootDevice: string,
-    architecture: string
-  ): Promise<string>;
-
+  /** Statut EVS brut du volume (available | rollbacking | error_rollbacking…) — suivi du rollback en place. */
+  getVolumeStatus(volumeId: string): Promise<string>;
   // ---- Restauration async (EVS volume → IMS image → launch normal) -------
   createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string>; // → jobId
   createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string>; // → jobId

@@ -39,6 +39,9 @@ import {
   restoreToImage,
   restoreToLaunch,
   clearRestore,
+  startRollback,
+  setRollbackStep,
+  clearRollback,
   updateVm,
   deleteVm,
   clearCourseReady,
@@ -96,6 +99,11 @@ const startInstance = (env: Env, serverId: string) => huawei(env).startInstance(
 const stopInstance = (env: Env, serverId: string) => huawei(env).stopInstance(serverId);
 const rebootInstance = (env: Env, serverId: string) => huawei(env).rebootInstance(serverId);
 const describeRootVolume = (env: Env, serverId: string) => huawei(env).describeRootVolume(serverId);
+
+// Restore GATÉ au niveau du compte (real-name auth requise pour whole-image, cf.
+// docs/design-cbr-restore.md). Les pipelines IMS (new-VM) et rollback EVS (en place)
+// restent DORMANTS : flag à repasser à true une fois la real-name auth validée.
+const RESTORE_ENABLED = false;
 const createSnapshot = (env: Env, volumeId: string, description: string) => huawei(env).createSnapshot(volumeId, description);
 const describeSnapshot = (env: Env, snapshotId: string) => huawei(env).describeSnapshot(snapshotId);
 const deleteSnapshot = (env: Env, snapshotId: string) => huawei(env).deleteSnapshot(snapshotId);
@@ -231,7 +239,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
 
   const c = huawei(env);
   const isWindows = os.connect === 'rdp';
-  const isRestore = !!req.restore_snapshot_id;
+  const isRestore = RESTORE_ENABLED && !!req.restore_snapshot_id;
   const hardeningOn = env.HARDENING !== 'false';
   let userData: string | undefined;
   let encPassword: string | null = null;
@@ -846,6 +854,32 @@ app.delete('/api/requests/:id/snapshots/:sid', apiAuth, async (c) => {
   return c.json({ ok: true });
 });
 
+// Restauration EN PLACE : rollback de la VM vers un snapshot EVS (destructif).
+// Piloté ensuite par le réconciliateur (stopping → rollingback → starting).
+app.post('/api/requests/:id/snapshots/:sid/rollback', apiAuth, async (c) => {
+  if (!RESTORE_ENABLED) return c.json({ error: 'restore_gated' }, 403); // garde : restore gated (cf. RESTORE_ENABLED)
+  const user = c.get('user');
+  const id = Number(c.req.param('id')), sid = Number(c.req.param('sid'));
+  const ctx = await authorizeVm(c, id);
+  if (!ctx) return c.json({ error: 'not_found' }, 404);
+  if (!ctx.vm?.server_id) return c.json({ error: 'no_instance' }, 400);
+  if (ctx.r.expired_at) return c.json({ error: 'expired' }, 409);
+  if (ctx.vm.rollback_step) return c.json({ error: 'rollback_in_progress' }, 409);
+  const snap = await getSnapshot(c.env, sid, ctx.r.user_email);
+  if (!snap || snap.request_id !== id) return c.json({ error: 'not_found' }, 404);
+  if (snap.status !== 'completed' || !snap.snapshot_id) return c.json({ error: 'snapshot_not_ready' }, 409);
+  try {
+    const rv = await describeRootVolume(c.env, ctx.vm.server_id);
+    if (!rv.volumeId) return c.json({ error: 'no_volume' }, 400);
+    await stopInstance(c.env, ctx.vm.server_id);
+    await updateVm(c.env, id, 'stopping');
+    if (ctx.r.schedule_enabled) await setSchedulePaused(c.env, id, true);
+    await startRollback(c.env, id, snap.snapshot_id, rv.volumeId);
+    await audit(c.env, user.email, 'vm.rollback', `req:${id}`, snap.snapshot_id);
+    return c.json({ ok: true });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
 // Live AWS state (state + public IP + uptime) — used by the detail page.
 app.get('/api/requests/:id/live', apiAuth, async (c) => {
   const id = Number(c.req.param('id'));
@@ -1205,6 +1239,45 @@ async function reconcile(env: Env): Promise<void> {
         continue;
       }
 
+      // ---- Pré-vol ROLLBACK EN PLACE (additif ; ignoré si rollback_step est NULL) ----
+      // Machine à états : stopping → rollingback → starting, conduite par le réconciliateur.
+      if (row.rollback_step) {
+        const serverId = row.server_id;
+        if (!serverId) { await clearRollback(env, row.id); continue; }
+        if (row.rollback_step === 'stopping') {
+          const s = await describeInstance(env, serverId);
+          if (s.state === 'error') throw new Error('VM en erreur pendant l\'arrêt');
+          if (s.state !== 'stopped') { if (s.state !== row.state) await updateVm(env, row.id, s.state); continue; }
+          await c.rollbackSnapshot(row.rollback_snapshot_id!, row.rollback_volume_id!);
+          await setRollbackStep(env, row.id, 'rollingback');
+          await audit(env, 'system', 'vm.rollback.started', `req:${row.id}`, row.rollback_snapshot_id ?? '');
+          continue;
+        }
+        if (row.rollback_step === 'rollingback') {
+          const vs = await c.getVolumeStatus(row.rollback_volume_id!);
+          if (vs === 'available') {
+            await startInstance(env, serverId);
+            await setRollbackStep(env, row.id, 'starting');
+            await audit(env, 'system', 'vm.rollback.volume.restored', `req:${row.id}`, row.rollback_volume_id ?? '');
+          } else if (vs === 'error' || vs === 'error_rollbacking') {
+            throw new Error(`rollback EVS échoué (volume ${vs})`);
+          }
+          continue;
+        }
+        if (row.rollback_step === 'starting') {
+          const s = await describeInstance(env, serverId);
+          if (s.state === 'running' && s.publicIp) {
+            await updateVm(env, row.id, 'running', s.publicIp);
+            // La pause posée au lancement du rollback n'était qu'un garde transitoire :
+            // on restaure l'invariant planning (sinon la VM tournerait 24/7 hors planning).
+            if (row.schedule_enabled) await setSchedulePaused(env, row.id, false);
+            await clearRollback(env, row.id);
+            await audit(env, 'system', 'vm.rollback.done', `req:${row.id}`, serverId);
+          } else { await updateVm(env, row.id, s.state); }
+          continue;
+        }
+      }
+
       // Modèle asynchrone : résoudre job_id → server_id s'il n'est pas encore connu.
       if (!row.server_id) {
         if (!row.provider_job_id) continue;
@@ -1278,6 +1351,13 @@ async function reconcile(env: Env): Promise<void> {
         if (row.restore_image_id) await c.deleteImage(row.restore_image_id).catch(() => {});
         await setRequestStatus(env, row.id, 'failed', undefined, `restore: ${e.message}`).catch(() => {});
         await clearRestore(env, row.id).catch(() => {});
+      }
+      // Rollback en place : échec → tentative de redémarrage best-effort + on efface l'état
+      // (la demande reste 'active', pas de blocage). Garde-fou par rollback_step NULL.
+      if (row.rollback_step) {
+        if (row.server_id) await startInstance(env, row.server_id).catch(() => {});
+        if (row.schedule_enabled) await setSchedulePaused(env, row.id, false).catch(() => {});
+        await clearRollback(env, row.id).catch(() => {});
       }
       await audit(env, 'system', 'vm.reconcile.error', `req:${row.id}`, e.message);
     }

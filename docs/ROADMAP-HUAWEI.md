@@ -154,6 +154,32 @@ Outil : étendre `scripts/huawei-e2e.ts` + `huawei-stabilize.ts`.
 
 ## 6. Phase 4 — Restore opérationnel via CBR (remplace IMS-from-volume) ❌→⬜
 
+### 🧭 VERDICT CBR (recon read-only 2026-06-24)
+
+**Cartographie APIs CBR (eu-west-101, confirmées) :** `vaults` (CRUD), `checkpoints` (backup immédiat), `backups` (list/detail/**restore**), `policies` (defaultPolicy 30j présente), `operation-logs` (monitoring lisible). IMS `wholeimages/action` (backup→image) existe. IAM CBR FullAccess = **accordé** (write OK). Compte propre (0 vault/backup).
+
+**Deux sorties CBR distinctes :**
+1. **Restore → serveur EXISTANT** (`POST /v3/{pid}/backups/{id}/restore`) = en place, **pas de création d'image** → *probablement non gaté real-name*. Managé par CBR (pas de detach/attach manuel).
+2. **Whole-image → NOUVELLE VM** (`POST ims/v1/cloudimages/wholeimages/action` avec `backup_id`) → **❌ bloqué `400 IMG.0026` real-name auth** (testé live).
+
+**Verdict :**
+- **« Nouvelle VM depuis snapshot » (parité AWS)** = **VIABLE mais GATÉ real-name auth.** Sans real-name → non-viable (whole-image est le SEUL chemin vers une nouvelle ECS ; CBR ne crée pas de serveur directement). Avec real-name → viable et propre.
+- **« Restore en place » via CBR restore-to-server** = **INCERTAIN (prometteur)** : à confirmer par 1 test contrôlé (besoin real-name ? restore d'un disque système en place ?). S'il passe → **strictement supérieur** au hack EVS detach/re-attach (managé, moins de risque de brick).
+
+**Comparaison restore en place :**
+| Critère | CBR restore-to-server | EVS rollback + detach/re-attach |
+|---|---|---|
+| Création image / real-name | Non (probable) | Non |
+| Gestion disque | **Managée par CBR** | Detach/attach disque de boot **manuel (risque brick)** |
+| Artefact backup | CBR backup (serveur, sys+data) | Snapshot EVS (volume) |
+| Risque | Plus faible | Plus élevé |
+
+**Recommandation :** (1) compléter **real-name auth** → CBR whole-image = vraie parité « nouvelle VM ». (2) Si real-name retardé et qu'un restore en place est voulu : **CBR restore-to-server** (après 1 test de confirmation), **pas** le hack detach/re-attach. (3) Real-name auth = prérequis prod de toute façon.
+
+**Plan d'implémentation si CBR retenu (après real-name) :** provider `ensureVault`/`backupServer`/`resolveBackup`/`wholeImageFromBackup`(+`restoreToServer`) → contrat `cloud.ts` (méthodes restore neutres) → réconciliateur (machine à états backup→image→launch, suivi via jobs/operation-logs) → migration D1 additive (`vault_id`/`backup_id`/restore step) → UI (ré-activer « nouvelle VM depuis snapshot ») → FinOps (cycle de vie vault/backup, rétention) → ADR 0006 réécrit.
+
+---
+
 Justification : image-depuis-volume bloquée (lignée gold). **CBR = voie native Huawei.**
 
 > ✅ **Étude read-only faite (2026-06-24)** : CBR dispo sur EU (`cbr.eu-west-101.…/v3/{pid}/vaults|backups|policies` = 200, `defaultPolicy` backup 30j présente). `ims …/v1/cloudimages/wholeimages/action` existe (400 sur body vide = endpoint OK, pas 404). CSBS absent (404) → CBR est le bon service.

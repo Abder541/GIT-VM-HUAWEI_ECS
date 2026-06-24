@@ -20,11 +20,16 @@ function SnapStatus({ s }: { s: Snapshot }) {
   );
 }
 
+// Restore en place GATÉ (rollback EVS bloqué « in-use », restore CBR gaté real-name —
+// cf. docs/design-cbr-restore.md). Bouton masqué ; backend dormant. Flag ré-activable.
+const ROLLBACK_ENABLED = false;
+
 export function SnapshotPanel({ request }: { request: VmRequest }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const toast = useToast();
   const [delTarget, setDelTarget] = useState<Snapshot | null>(null);
+  const [rbTarget, setRbTarget] = useState<Snapshot | null>(null);
 
   const q = useQuery({
     queryKey: ['snapshots', request.id],
@@ -45,6 +50,11 @@ export function SnapshotPanel({ request }: { request: VmRequest }) {
   const delM = useMutation({
     mutationFn: (sid: number) => api.deleteSnapshot(request.id, sid),
     onSuccess: () => { invalidate(); setDelTarget(null); toast.success(t('snapshot.deleted')); },
+    onError: () => toast.error(t('toast.error')),
+  });
+  const rbM = useMutation({
+    mutationFn: (sid: number) => api.rollbackSnapshot(request.id, sid),
+    onSuccess: () => { setRbTarget(null); toast.success(t('snapshot.restored')); qc.invalidateQueries({ queryKey: ['request', request.id] }); },
     onError: () => toast.error(t('toast.error')),
   });
 
@@ -77,6 +87,15 @@ export function SnapshotPanel({ request }: { request: VmRequest }) {
               </div>
               <div className="flex items-center gap-3">
                 <SnapStatus s={s} />
+                {ROLLBACK_ENABLED && s.status === 'completed' && (
+                  <button
+                    onClick={() => setRbTarget(s)}
+                    title={t('snapshot.restore')}
+                    className="grid h-8 place-items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  >
+                    {t('snapshot.restore')}
+                  </button>
+                )}
                 <button
                   onClick={() => setDelTarget(s)}
                   title={t('snapshot.delete')}
@@ -100,6 +119,21 @@ export function SnapshotPanel({ request }: { request: VmRequest }) {
             <Button variant="secondary" onClick={() => setDelTarget(null)} disabled={delM.isPending}>{t('common.cancel')}</Button>
             <Button variant="danger" disabled={delM.isPending} onClick={() => delTarget && delM.mutate(delTarget.id)}>
               {delM.isPending ? <Spinner className="h-4 w-4" /> : null}{t('common.delete')}
+            </Button>
+          </>
+        }
+      />
+
+      <Modal
+        open={!!rbTarget}
+        onClose={() => setRbTarget(null)}
+        title={t('snapshot.restoreTitle')}
+        description={t('snapshot.restoreBody')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRbTarget(null)} disabled={rbM.isPending}>{t('common.cancel')}</Button>
+            <Button variant="danger" disabled={rbM.isPending} onClick={() => rbTarget && rbM.mutate(rbTarget.id)}>
+              {rbM.isPending ? <Spinner className="h-4 w-4" /> : null}{t('snapshot.restore')}
             </Button>
           </>
         }

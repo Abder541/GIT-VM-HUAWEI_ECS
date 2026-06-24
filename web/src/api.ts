@@ -76,6 +76,8 @@ export const api = {
     req<{ ok: true }>(`/api/requests/${id}/snapshot-on-delete`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   deleteSnapshot: (id: number, sid: number) =>
     req<{ ok: true }>(`/api/requests/${id}/snapshots/${sid}`, { method: 'DELETE' }),
+  rollbackSnapshot: (id: number, sid: number) =>
+    req<{ ok: true }>(`/api/requests/${id}/snapshots/${sid}/rollback`, { method: 'POST' }),
   start: (id: number) => req<{ ok: true }>(`/api/requests/${id}/start`, { method: 'POST' }),
   stop: (id: number) => req<{ ok: true }>(`/api/requests/${id}/stop`, { method: 'POST' }),
   reboot: (id: number) => req<{ ok: true }>(`/api/requests/${id}/reboot`, { method: 'POST' }),

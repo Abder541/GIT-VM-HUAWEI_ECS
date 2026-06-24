@@ -243,25 +243,11 @@ export function huawei(env: Env): CloudProvider {
       });
     },
 
-    // ---- Restauration (IMS) ----------------------------------------------
-    // U6 : le chemin « snapshot → image relançable » diffère d'AWS (pas de
-    // RegisterImage direct depuis un snapshot EVS). Approche Huawei : créer un
-    // volume depuis le snapshot, puis une image système IMS depuis ce volume.
-    // À valider en live avant activation de la restauration.
-    async registerImageFromSnapshot(name: string, snapshotId: string, _rootDevice: string, _architecture: string): Promise<string> {
-      // 1) Volume depuis le snapshot.
-      const cv = await req(ep.evs, 'POST', `/v2/${pid}/cloudvolumes`, {
-        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', name: `gitvm-restore-${Date.now()}` } },
-      });
-      const volumeId = cv?.volume?.id ?? cv?.id;
-      if (!volumeId) throw new Error('Restore: création du volume depuis snapshot échouée');
-      // 2) Image système IMS depuis le volume (action asynchrone → job/image_id).
-      const im = await req(ep.ims, 'POST', `/v2/cloudimages/action`, {
-        body: { name: name.slice(0, 64), volume_id: volumeId, os_version: 'Other Linux(64 bit)' },
-      });
-      const imageId = im?.image_id ?? im?.id;
-      if (!imageId) throw new Error('Restore: création image IMS échouée (U6 — à valider)');
-      return imageId;
+    // Statut EVS brut du volume (available | rollbacking | error_rollbacking | error…).
+    // Le réconciliateur s'en sert pour savoir quand le rollback est terminé (→ 'available').
+    async getVolumeStatus(volumeId: string): Promise<string> {
+      const v = await req(ep.evs, 'GET', `/v2/${pid}/cloudvolumes/${volumeId}`);
+      return v?.volume?.status ?? 'unknown';
     },
 
     // ---- Restauration async (EVS volume → IMS image → launch normal) -----

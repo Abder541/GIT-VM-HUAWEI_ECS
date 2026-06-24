@@ -229,7 +229,7 @@ function windowsHardeningLines(): string[] {
   ];
 }
 
-// Create the SSH key + EC2 instance for a request. Shared by approve + retry.
+// Create the SSH key + ECS instance for a request. Shared by approve + retry.
 // Windows VMs additionally get an Administrator password set via UserData and
 // stored encrypted (no SSH; the user connects over RDP).
 async function provisionRequest(env: Env, req: any): Promise<string> {
@@ -306,7 +306,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
   return jobId;
 }
 
-// Take an EBS snapshot of a VM's root volume (best-effort; used by auto-on-delete).
+// Take an EVS snapshot of a VM's root volume (best-effort; used by auto-on-delete).
 async function autoSnapshot(env: Env, requestId: number, owner: string, instanceId: string): Promise<void> {
   try {
     const rv = await describeRootVolume(env, instanceId);
@@ -484,7 +484,7 @@ app.post('/api/requests/batch', apiAuth, async (c) => {
 app.delete('/api/requests/:id', apiAuth, async (c) => {
   const user = c.get('user');
   const id = Number(c.req.param('id'));
-  // Capture snapshots before the row is gone, then cascade-delete them (AWS + DB).
+  // Capture snapshots before the row is gone, then cascade-delete them (Huawei + DB).
   const snaps = await listSnapshotsForRequest(c.env, id);
   const ok = await deleteRequest(c.env, user.email, id);
   if (!ok) return c.json({ error: 'not_deletable' }, 409);
@@ -798,7 +798,7 @@ app.post('/api/requests/:id/reset', apiAuth, async (c) => {
   }
 });
 
-// ---- Snapshots (EBS) ----------------------------------------------------
+// ---- Snapshots (EVS) ----------------------------------------------------
 app.post('/api/requests/:id/snapshot', apiAuth, async (c) => {
   const id = Number(c.req.param('id'));
   const ctx = await authorizeVm(c, id);
@@ -840,7 +840,7 @@ app.post('/api/requests/:id/snapshot-on-delete', apiAuth, async (c) => {
   return c.json({ ok: true });
 });
 
-// Delete one snapshot (AWS EBS snapshot + DB row).
+// Delete one snapshot (Huawei EVS snapshot + DB row).
 app.delete('/api/requests/:id/snapshots/:sid', apiAuth, async (c) => {
   const user = c.get('user');
   const id = Number(c.req.param('id'));
@@ -881,7 +881,7 @@ app.post('/api/requests/:id/snapshots/:sid/rollback', apiAuth, async (c) => {
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// Live AWS state (state + public IP + uptime) — used by the detail page.
+// Live Huawei state (state + public IP + uptime) — used by the detail page.
 app.get('/api/requests/:id/live', apiAuth, async (c) => {
   const id = Number(c.req.param('id'));
   const ctx = await authorizeVm(c, id);
@@ -1184,7 +1184,7 @@ app.post('/api/admin/requests/:id/suggest', apiAdmin, async (c) => {
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 
 // ---- Scheduled: reconcile state + scheduled stop ------------------------
-// Reconcile DB against AWS: promote provisioning->active, sync running/stopped
+// Reconcile DB against Huawei: promote provisioning->active, sync running/stopped
 // state, and detect drift (instances terminated outside the portal).
 // OS du snapshot → os_version IMS (pour la création d'image de restauration).
 function imsOsVersion(osId: string | null | undefined): string {
@@ -1409,7 +1409,7 @@ async function scheduledStop(env: Env): Promise<void> {
   }
 }
 
-// Auto-stop VMs idle (low CPU) for IDLE_STOP_HOURS. Best-effort; needs CloudWatch read.
+// Auto-stop VMs idle (low CPU) for IDLE_STOP_HOURS. Best-effort; needs Cloud Eye (CES) read.
 // The user can restart from the portal at any time.
 async function enforceIdleStop(env: Env): Promise<void> {
   if (env.IDLE_STOP !== 'true') return;
@@ -1427,7 +1427,7 @@ async function enforceIdleStop(env: Env): Promise<void> {
         await audit(env, 'system', 'vm.idle_stop', `req:${vm.id}`, `cpuMax=${cpu.max.toFixed(1)}%`);
       }
     } catch {
-      /* skip this tick (e.g. CloudWatch permission missing) */
+      /* skip this tick (e.g. Cloud Eye/CES permission missing) */
     }
   }
 }
@@ -1481,7 +1481,7 @@ async function enforceExpiry(env: Env): Promise<void> {
   }
 }
 
-// Poll pending EBS snapshots and mark them completed/error.
+// Poll pending EVS snapshots and mark them completed/error.
 async function syncSnapshots(env: Env): Promise<void> {
   for (const s of await listPendingSnapshots(env)) {
     try {

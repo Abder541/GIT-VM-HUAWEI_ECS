@@ -3,7 +3,7 @@
 > Plan-maître exhaustif pour finir le portage **GIT VM Portal → Huawei Cloud ECS**.
 > Chaque tâche : **objectif · étapes · test/debug · résultat attendu · reco · risque**.
 > Convention projet : docs FR, code EN, TypeScript strict, Hono, migrations D1 additives,
-> tout le couplage cloud derrière `src/cloud.ts` (impl `src/huawei.ts`). Voir [AGENTS.md](../AGENTS.md).
+> tout le couplage cloud derrière `src/cloud.ts` (impl `src/huawei.ts`). Voir [CLAUDE.md](../CLAUDE.md) · [README.md](../README.md) · [docs/](README.md).
 >
 > Dernière analyse live : 2026-06-24 (région `eu-west-101`, site `myhuaweicloud.eu`).
 > Légende : ✅ fait & validé · 🔶 codé non-validé-live · ⬜ à faire · ❌ bloqué.
@@ -140,6 +140,16 @@ Risque : surcoût ; format user_data Windows ; temps de boot long (mot de passe 
 ---
 
 ## 5. Phase 3 — Validation parité E2E 🔶
+
+> ✅ **Audit code parité (2026-06-24)** : réconciliateur + cycle de vie (`reconcile`, `applySchedules`,
+> `enforceExpiry`+snapshot-on-delete, `enforceIdleStop`, `retryFailed`, `scheduledStop`/garde nuit,
+> `scheduled()`) = **portage FIDÈLE** d'AWS (comparaison directe réf. AWS), nommage neutralisé
+> (0 résidu `aws_*`), ordre pipeline conforme. **Aucun bug de portage.**
+> 🔎 **Relevé (arbitrage produit, NON modifié — identique à AWS)** : `listRunningVmsForIdle` n'exclut pas
+> les VM à planning actif → l'idle-stop peut arrêter une VM planifiée que `applySchedules` relance
+> (oscillation lente + notifs « idle_stopped » parasites). Correctif simple si voulu :
+> `AND r.schedule_enabled = 0` dans la requête (⚠️ diverge d'AWS). **Décision produit requise.**
+> ⬜ Reste = **validation E2E LIVE** (VM facturables → gated) :
 
 Re-tester en réel (parité AGENTS.md) sur le cron unique `*/2`:
 - ⬜ Multi-VM & groupes (1–4, demande groupée formateur round-robin).

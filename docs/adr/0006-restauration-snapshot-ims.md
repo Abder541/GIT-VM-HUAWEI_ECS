@@ -1,7 +1,17 @@
 # ADR 0006 — Restauration d'une VM depuis un snapshot (Huawei IMS)
 
-- **Statut** : Accepté (design) — implémentation à **finaliser & valider en live** (inconnue U6)
+- **Statut** : ⚠️ **SUPERSEDÉ / GATÉ** (2026-06-24) — à réécrire après real-name auth
 - **Date** : 2026-06-23
+
+> ⚠️ **MISE À JOUR 2026-06-24** — la voie IMS de cet ADR (volume → image système → launch) est
+> **bloquée au niveau du COMPTE**, prouvé live :
+> 1. `createImageFromVolume` → `400 charged image cannot be exported` (images gold EU non-exportables) ;
+> 2. voie CBR whole-image → `400 IMG.0026` **real-name authentication** requise (le grant IMS n'y change rien).
+>
+> Le code `registerImageFromSnapshot` (amorce option B) a été **supprimé** (mort). Voie cible retenue =
+> **CBR** (backup → whole-image → launch), conçue dans **`docs/design-cbr-restore.md`** (PROVISOIRE, gatée
+> real-name). Repli en place = **rollback EVS** (codé, dormant). **Restore = GATÉ** et ne bloque plus le
+> projet. Verdict + plan : `docs/ROADMAP-HUAWEI.md` §Phase 4. Cet ADR sera réécrit après activation real-name.
 
 ## Contexte
 

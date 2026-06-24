@@ -1,5 +1,8 @@
 # Feuille de route — par phases
 
+> 📍 **Suivi d'EXÉCUTION live (état réel, items gated, priorités) → [`ROADMAP-HUAWEI.md`](../ROADMAP-HUAWEI.md).**
+> Ce document-ci = vision **conception par phases** (architecture-first). Les deux sont complémentaires.
+>
 > Principe : **parité d'abord** (un socle robuste, testable, de bout en bout), **puis** activation
 > progressive des couches avancées — toutes **conçues dès maintenant**.
 >

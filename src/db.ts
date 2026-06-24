@@ -570,10 +570,14 @@ export async function listActiveVms(env: Env): Promise<ActiveVm[]> {
 
 export interface IdleVm { id: number; user_email: string; server_id: string | null; }
 export async function listRunningVmsForIdle(env: Env): Promise<IdleVm[]> {
+  // L'idle-stop RESPECTE le planning : on exclut les VM à planning actif (schedule_enabled=1),
+  // sinon l'idle-stop arrêterait une VM que applySchedules doit garder allumée → oscillation +
+  // notifs parasites. (Amélioration vs la réf. AWS, qui ne les excluait pas.)
   const res = await env.DB.prepare(
     `SELECT r.id, r.user_email, v.server_id
        FROM vm_requests r JOIN vms v ON v.request_id = r.id
-      WHERE r.status = 'active' AND r.expired_at IS NULL AND v.state = 'running' AND v.server_id IS NOT NULL`
+      WHERE r.status = 'active' AND r.expired_at IS NULL AND r.schedule_enabled = 0
+        AND v.state = 'running' AND v.server_id IS NOT NULL`
   ).all<IdleVm>();
   return res.results ?? [];
 }

@@ -123,7 +123,7 @@ export function Admin() {
 /* ---------- Overview ---------- */
 function OverviewSection({ stats, metrics }: { stats: Record<string, number>; metrics?: Metrics }) {
   const { t } = useTranslation();
-  const auditQ = useQuery({ queryKey: ['admin-audit', 8], queryFn: () => api.adminAudit(8), refetchInterval: 15000 });
+  const auditQ = useQuery({ queryKey: ['admin-audit', 50], queryFn: () => api.adminAudit(50), refetchInterval: 15000 });
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -143,7 +143,9 @@ function OverviewSection({ stats, metrics }: { stats: Record<string, number>; me
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.recent')}</h3>
         </div>
-        <AuditList entries={auditQ.data ?? []} compact />
+        <div className="max-h-96 overflow-y-auto pr-1">
+          <AuditList entries={auditQ.data ?? []} compact />
+        </div>
       </Card>
     </div>
   );

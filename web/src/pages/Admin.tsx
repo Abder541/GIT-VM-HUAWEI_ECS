@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
@@ -329,7 +329,12 @@ const snapTone = (s: string) => {
 
 function SnapshotsSection() {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const snapsQ = useQuery({ queryKey: ['admin-snapshots'], queryFn: api.adminSnapshots, refetchInterval: 30000 });
+  const del = useMutation({
+    mutationFn: (sid: number) => api.adminDeleteSnapshot(sid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-snapshots'] }),
+  });
   const snaps = snapsQ.data;
   if (!snaps) return <p className="py-10 text-center text-sm text-muted-foreground">…</p>;
   return (
@@ -379,6 +384,13 @@ function SnapshotsSection() {
                             {t('admin.snapManage')}
                           </Link>
                         )}
+                        <button
+                          onClick={() => { if (window.confirm(t('admin.snapDeleteConfirm'))) del.mutate(s.id); }}
+                          disabled={del.isPending}
+                          className="text-xs font-medium text-red-600 transition hover:underline disabled:opacity-40 dark:text-red-400"
+                        >
+                          {t('admin.snapDelete')}
+                        </button>
                       </div>
                     </td>
                   </tr>

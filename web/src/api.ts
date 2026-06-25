@@ -86,6 +86,7 @@ export const api = {
   adminMetrics: () => req<{ metrics: Metrics }>('/api/admin/metrics').then((r) => r.metrics),
   adminCost: () => req<CostReport>('/api/admin/cost'),
   adminSnapshots: () => req<{ snapshots: AdminSnapshot[] }>('/api/admin/snapshots').then((r) => r.snapshots),
+  adminDeleteSnapshot: (sid: number) => req<{ ok: true }>(`/api/admin/snapshots/${sid}`, { method: 'DELETE' }),
   adminUsers: () => req<{ users: AdminUser[] }>('/api/admin/users').then((r) => r.users),
   adminAudit: (limit = 150) =>
     req<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`).then((r) => r.entries),

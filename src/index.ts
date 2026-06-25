@@ -36,6 +36,7 @@ import {
   listActiveForCost,
   listCostData,
   listAllSnapshots,
+  getAnySnapshot,
   setRequestStatus,
   createVm,
   setServerId,
@@ -898,6 +899,17 @@ app.get('/api/admin/cost', apiAdmin, async (c) => {
 // Tous les snapshots (vue admin globale).
 app.get('/api/admin/snapshots', apiAdmin, async (c) => {
   return c.json({ snapshots: await listAllSnapshots(c.env) });
+});
+
+// Supprimer un snapshot (admin) — EVS + ligne DB. Best-effort côté Huawei.
+app.delete('/api/admin/snapshots/:sid', apiAdmin, async (c) => {
+  const sid = Number(c.req.param('sid'));
+  const snap = await getAnySnapshot(c.env, sid);
+  if (!snap) return c.json({ error: 'not_found' }, 404);
+  if (snap.snapshot_id) await deleteSnapshot(c.env, snap.snapshot_id).catch(() => {});
+  await deleteSnapshotRow(c.env, sid);
+  await audit(c.env, c.get('user').email, 'snapshot.delete', `snap:${sid}`, snap.snapshot_id ?? '');
+  return c.json({ ok: true });
 });
 
 app.get('/api/admin/users', apiAdmin, async (c) => {

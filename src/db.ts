@@ -235,6 +235,11 @@ export async function getSnapshot(env: Env, id: number, owner: string): Promise<
   return await env.DB.prepare(`SELECT * FROM snapshots WHERE id = ?1 AND user_email = ?2`).bind(id, owner).first<SnapshotRow>();
 }
 
+// Snapshot par id sans contrôle de propriétaire (vue admin).
+export async function getAnySnapshot(env: Env, id: number): Promise<SnapshotRow | null> {
+  return await env.DB.prepare(`SELECT * FROM snapshots WHERE id = ?1`).bind(id).first<SnapshotRow>();
+}
+
 export async function updateSnapshotStatus(env: Env, snapshotId: string, status: string, sizeGb?: number): Promise<void> {
   await env.DB.prepare(
     `UPDATE snapshots SET status = ?2, size_gb = COALESCE(?3, size_gb),

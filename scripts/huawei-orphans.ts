@@ -45,7 +45,7 @@ async function main() {
     if (unatt.length) clean = false;
   } else console.log(`Volumes EVS : HTTP ${vol.status} ${vol.t.slice(0, 120)}`);
 
-  const snap = await get(evs, `/v2/${PID}/cloudsnapshots`, { limit: '100' });
+  const snap = await get(evs, `/v2/${PID}/cloudsnapshots/detail`, { limit: '100' });
   if (snap.ok) {
     const snaps = (snap.j?.snapshots ?? []).filter((s: any) => /gitvm/.test(JSON.stringify(s)));
     console.log(`Snapshots EVS (gitvm) : ${snaps.length}` + (snaps.length ? ' ✗' : ' ✓'));

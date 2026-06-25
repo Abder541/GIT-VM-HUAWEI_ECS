@@ -41,14 +41,6 @@ export async function setUserRole(env: Env, email: string, role: 'member' | 'for
   await env.DB.prepare(`UPDATE users SET role = ?2 WHERE email = ?1`).bind(email, role).run();
 }
 
-export async function addComment(env: Env, requestId: number, author: string, body: string) {
-  await env.DB.prepare(
-    `INSERT INTO request_comments (request_id, author, body) VALUES (?1, ?2, ?3)`
-  )
-    .bind(requestId, author, body)
-    .run();
-}
-
 // ---- Notifications in-app -----------------------------------------------
 export async function addNotification(env: Env, userEmail: string, type: string, link: string | null = null) {
   await env.DB.prepare(`INSERT INTO notifications (user_email, type, link) VALUES (?1, ?2, ?3)`)
@@ -80,15 +72,6 @@ export async function countUnreadNotifications(env: Env, userEmail: string): Pro
 
 export async function markNotificationsRead(env: Env, userEmail: string) {
   await env.DB.prepare(`UPDATE notifications SET read = 1 WHERE user_email = ?1 AND read = 0`).bind(userEmail).run();
-}
-
-export async function listComments(env: Env, requestId: number) {
-  const res = await env.DB.prepare(
-    `SELECT id, author, body, created_at FROM request_comments WHERE request_id = ?1 ORDER BY created_at`
-  )
-    .bind(requestId)
-    .all();
-  return res.results ?? [];
 }
 
 export async function metrics(env: Env) {
@@ -456,19 +439,54 @@ export async function createVm(
   encryptedPrivateKey: string,
   sshUser: string,
   connectMethod: 'ssh' | 'rdp' = 'ssh',
-  encryptedAdminPassword: string | null = null
+  encryptedAdminPassword: string | null = null,
+  restoreStep: string | null = null
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO vms (request_id, provider_job_id, state, ssh_key_name, ssh_private_key, ssh_user, connect_method, admin_password)
-     VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7)`
+    `INSERT INTO vms (request_id, provider_job_id, state, ssh_key_name, ssh_private_key, ssh_user, connect_method, admin_password, restore_step)
+     VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7, ?8)`
   )
-    .bind(requestId, jobId, keyName, encryptedPrivateKey, sshUser, connectMethod, encryptedAdminPassword)
+    .bind(requestId, jobId, keyName, encryptedPrivateKey, sshUser, connectMethod, encryptedAdminPassword, restoreStep)
     .run();
 }
 
 // Renseigne le server_id une fois le job de création résolu (réconciliateur).
 export async function setServerId(env: Env, requestId: number, serverId: string): Promise<void> {
   await env.DB.prepare(`UPDATE vms SET server_id = ?2 WHERE request_id = ?1`).bind(requestId, serverId).run();
+}
+
+// ===== LEGACY / DEPRECATED — restore IMS (restoreTo*) + rollback EVS (startRollback/…) =====
+// Remplacé par CBR (cf. docs/design-cbr-restore.md). Helpers d'état INACTIFS : `restore_step` et
+// `rollback_step` ne sont jamais positionnés par un flux actif (entrées gated RESTORE_ENABLED=false).
+// Conservés comme legacy ; NE PAS réutiliser ; à retirer/remplacer quand CBR sera implémenté.
+// ---- Restauration : transitions du pré-vol (pilotées par le réconciliateur) ----
+// Volume prêt → étape image (provider_job_id = job de création d'image).
+export async function restoreToImage(env: Env, requestId: number, volumeId: string, imageJobId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET restore_step = 'image', restore_volume_id = ?2, provider_job_id = ?3 WHERE request_id = ?1`)
+    .bind(requestId, volumeId, imageJobId).run();
+}
+// Image prête → étape launch (volume libéré ; provider_job_id = job de lancement).
+export async function restoreToLaunch(env: Env, requestId: number, imageId: string, launchJobId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET restore_step = 'launch', restore_image_id = ?2, restore_volume_id = NULL, provider_job_id = ?3 WHERE request_id = ?1`)
+    .bind(requestId, imageId, launchJobId).run();
+}
+// Fin ou échec de restauration → efface l'état de restauration.
+export async function clearRestore(env: Env, requestId: number): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET restore_step = NULL, restore_volume_id = NULL, restore_image_id = NULL WHERE request_id = ?1`)
+    .bind(requestId).run();
+}
+
+// --- Rollback EN PLACE (restauration d'une VM vers un snapshot EVS) ---
+export async function startRollback(env: Env, requestId: number, snapshotId: string, volumeId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = 'stopping', rollback_snapshot_id = ?2, rollback_volume_id = ?3 WHERE request_id = ?1`)
+    .bind(requestId, snapshotId, volumeId).run();
+}
+export async function setRollbackStep(env: Env, requestId: number, step: string): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = ?2 WHERE request_id = ?1`).bind(requestId, step).run();
+}
+export async function clearRollback(env: Env, requestId: number): Promise<void> {
+  await env.DB.prepare(`UPDATE vms SET rollback_step = NULL, rollback_snapshot_id = NULL, rollback_volume_id = NULL WHERE request_id = ?1`)
+    .bind(requestId).run();
 }
 
 export async function getKeyForRequest(
@@ -511,16 +529,26 @@ export interface ActiveVm {
   server_id: string | null;
   provider_job_id: string | null;
   ssh_user: string | null;
+  ssh_key_name: string | null;
   state: string | null;
   connect_method: string | null;
   schedule_enabled: number;
+  // restauration (NULL pour les VM normales)
+  restore_step: string | null;
+  restore_volume_id: string | null;
+  restore_image_id: string | null;
+  // rollback EN PLACE (NULL pour les VM normales)
+  rollback_step: string | null;
+  rollback_snapshot_id: string | null;
+  rollback_volume_id: string | null;
 }
 
 // Demandes ayant (ou en cours d'obtention d') une VM — pour reconcile / scheduled stop.
 export async function listActiveVms(env: Env): Promise<ActiveVm[]> {
   const res = await env.DB.prepare(
-    `SELECT r.id, r.status, r.user_email, v.server_id, v.provider_job_id, v.ssh_user, v.state, v.connect_method,
-            r.schedule_enabled
+    `SELECT r.id, r.status, r.user_email, v.server_id, v.provider_job_id, v.ssh_user, v.ssh_key_name, v.state, v.connect_method,
+            r.schedule_enabled, v.restore_step, v.restore_volume_id, v.restore_image_id,
+            v.rollback_step, v.rollback_snapshot_id, v.rollback_volume_id
        FROM vm_requests r JOIN vms v ON v.request_id = r.id
       WHERE r.status IN ('provisioning', 'active')`
   ).all<ActiveVm>();
@@ -529,10 +557,14 @@ export async function listActiveVms(env: Env): Promise<ActiveVm[]> {
 
 export interface IdleVm { id: number; user_email: string; server_id: string | null; }
 export async function listRunningVmsForIdle(env: Env): Promise<IdleVm[]> {
+  // L'idle-stop RESPECTE le planning : on exclut les VM à planning actif (schedule_enabled=1),
+  // sinon l'idle-stop arrêterait une VM que applySchedules doit garder allumée → oscillation +
+  // notifs parasites. (Amélioration vs la réf. AWS, qui ne les excluait pas.)
   const res = await env.DB.prepare(
     `SELECT r.id, r.user_email, v.server_id
        FROM vm_requests r JOIN vms v ON v.request_id = r.id
-      WHERE r.status = 'active' AND r.expired_at IS NULL AND v.state = 'running' AND v.server_id IS NOT NULL`
+      WHERE r.status = 'active' AND r.expired_at IS NULL AND r.schedule_enabled = 0
+        AND v.state = 'running' AND v.server_id IS NOT NULL`
   ).all<IdleVm>();
   return res.results ?? [];
 }

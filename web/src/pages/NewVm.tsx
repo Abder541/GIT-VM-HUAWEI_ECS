@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -75,6 +75,10 @@ function Badge({ children, tone = 'muted' }: { children: React.ReactNode; tone?:
 }
 
 /* ---- per-VM configuration form ---- */
+// Restore GATÉ (real-name auth requise — cf. docs/design-cbr-restore.md). Le sélecteur
+// « restaurer depuis un snapshot » est masqué tant que le pipeline n'est pas réactivable.
+const RESTORE_ENABLED = false;
+
 function VmConfig({ vm, onChange, catalog, snapshots }: { vm: VmCfg; onChange: (patch: Partial<VmCfg>) => void; catalog: PresetCatalog; snapshots: Snapshot[] }) {
   const { t } = useTranslation();
   const perfList = catalog.perf.filter((p) => !p.hidden);
@@ -95,7 +99,7 @@ function VmConfig({ vm, onChange, catalog, snapshots }: { vm: VmCfg; onChange: (
         <span className="mb-1.5 block text-xs font-medium text-muted-foreground">{t('newvm.vmName')}</span>
         <Input value={vm.name} onChange={(e) => onChange({ name: e.target.value })} placeholder={t('newvm.vmNamePlaceholder')} maxLength={60} />
       </label>
-      {snapshots.length > 0 && (
+      {RESTORE_ENABLED && snapshots.length > 0 && (
         <div className="rounded-xl border border-border bg-muted/30 p-3.5">
           <span className="mb-1.5 block text-xs font-medium text-muted-foreground">{t('newvm.restore')}</span>
           <Select

@@ -18,6 +18,8 @@ export interface StoragePreset {
   id: string;
   label: string;
   sizeGb: number;
+  /** Type de volume EVS (GPSSD général, SSD ultra-perf, SAS éco). Passé à launchInstance. */
+  volumetype: string;
   description?: string;
   recommended?: boolean;
   hidden?: boolean;
@@ -38,19 +40,35 @@ export interface OsPreset {
   hidden?: boolean;
 }
 
-// Flavors vérifiés disponibles sur eu-west-101 (série s6, usage général, x86_64).
+// Flavors vérifiés disponibles sur eu-west-101a (découverte live 2026-06-24, 293 flavors).
+// Familles : s6 (général), c7n (compute-optimized), m7n (memory-optimized), pi3 (GPU).
+// ⚠️ Prix EUR APPROXIMATIFS (pay-as-you-go) — à confirmer via l'API de tarification.
 export const PERF: Record<string, PerfPreset> = {
   micro: { id: 'micro', label: 'Micro', flavor: 's6.medium.2', vcpu: 1, ramGb: 2, hourlyEur: 0.018, description: 'Tests légers, scripts, apprentissage.' },
   small: { id: 'small', label: 'Small', flavor: 's6.large.2', vcpu: 2, ramGb: 4, hourlyEur: 0.036, description: 'Dev, petits services, la plupart des cours.', recommended: true },
   flex: { id: 'flex', label: 'Flex', flavor: 's6.large.4', vcpu: 2, ramGb: 8, hourlyEur: 0.05, description: '8 Go — plus confortable (conteneurs, IDE).' },
   perf: { id: 'perf', label: 'Performance', flavor: 's6.xlarge.2', vcpu: 4, ramGb: 8, hourlyEur: 0.072, description: '4 vCPU — charges plus lourdes.' },
+  // Compute-optimized (c7n) : calcul intensif (compilation, cyber, simulations).
+  compute: { id: 'compute', label: 'Compute', flavor: 'c7n.xlarge.2', vcpu: 4, ramGb: 8, hourlyEur: 0.10, description: '4 vCPU compute-optimized (c7n) — calcul intensif.' },
+  computeplus: { id: 'computeplus', label: 'Compute+', flavor: 'c7n.2xlarge.2', vcpu: 8, ramGb: 16, hourlyEur: 0.20, description: '8 vCPU compute-optimized — gros calcul.' },
+  // Memory-optimized (m7n) : data science, bases de données en mémoire.
+  memory: { id: 'memory', label: 'Mémoire', flavor: 'm7n.2xlarge.8', vcpu: 8, ramGb: 64, hourlyEur: 0.32, description: '8 vCPU / 64 Go (m7n) — data science, bases de données.' },
+  // GPU (pi3) : IA/CUDA. MASQUÉ — coût élevé ; exposer via un gate admin (cf. ROADMAP D4).
+  gpu: { id: 'gpu', label: 'GPU (IA/CUDA)', flavor: 'pi3.6xlarge.4', vcpu: 24, ramGb: 96, hourlyEur: 3.0, description: '24 vCPU + GPU — IA/CUDA. Coût élevé.', hidden: true },
 };
 
-// EVS (GPSSD). Plancher 40 Go : les images Huawei (Ubuntu 24.04…) imposent mindisk = 40.
+// EVS. Plancher 40 Go : les images gold (Ubuntu 24.04…) imposent mindisk = 40.
+// Types live eu-west-101 : GPSSD (toutes AZ), SSD (toutes AZ), SAS (AZ a/b).
+// ⚠️ GPSSD2 = AZ c uniquement → exclu tant que l'AZ par défaut est a (échec sinon).
 export const STORAGE: Record<string, StoragePreset> = {
-  s40: { id: 's40', label: '40 Go SSD', sizeGb: 40, description: 'Minimum (imposé par les images), suffisant pour un OS + outils.', recommended: true },
-  s80: { id: 's80', label: '80 Go SSD', sizeGb: 80, description: 'Confortable pour projets et données.' },
-  s160: { id: 's160', label: '160 Go SSD', sizeGb: 160, description: 'Gros besoins (datasets, conteneurs multiples).' },
+  s40: { id: 's40', label: '40 Go (GPSSD)', sizeGb: 40, volumetype: 'GPSSD', description: 'Minimum (imposé par les images), suffisant pour un OS + outils.', recommended: true },
+  s80: { id: 's80', label: '80 Go (GPSSD)', sizeGb: 80, volumetype: 'GPSSD', description: 'Confortable pour projets et données.' },
+  s160: { id: 's160', label: '160 Go (GPSSD)', sizeGb: 160, volumetype: 'GPSSD', description: 'Gros besoins (datasets, conteneurs multiples).' },
+  // Ultra-haute perf (SSD) : I/O élevées (bases de données, builds).
+  ssd80: { id: 'ssd80', label: '80 Go SSD ultra', sizeGb: 80, volumetype: 'SSD', description: 'Ultra-haute performance I/O (bases de données, compilation).' },
+  ssd160: { id: 'ssd160', label: '160 Go SSD ultra', sizeGb: 160, volumetype: 'SSD', description: 'Ultra-haute performance, gros volumes.' },
+  // Économique (SAS, high I/O) : grosse capacité moins chère.
+  sas160: { id: 'sas160', label: '160 Go éco (SAS)', sizeGb: 160, volumetype: 'SAS', description: 'Stockage économique haute capacité.' },
 };
 
 // Images IMS « gold » vérifiées (image_id concrets eu-west-101, via huawei-discover.mjs).
@@ -60,6 +78,18 @@ export const OS: Record<string, OsPreset> = {
   ubuntu2404: { id: 'ubuntu2404', label: 'Ubuntu 24.04 LTS', family: 'ubuntu', image: '188483c4-c66a-4559-83e6-e7f6591cdab0', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'La distribution Linux la plus répandue. Idéale pour débuter.', recommended: true },
   debian12: { id: 'debian12', label: 'Debian 12 (Bookworm)', family: 'debian', image: '1479cc34-8bc9-4bb0-9fe3-7530c39cd849', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Stable et légère, la référence des serveurs.' },
   ubuntu2204: { id: 'ubuntu2204', label: 'Ubuntu 22.04 LTS', family: 'ubuntu', image: 'd57f79e5-a9c5-4592-8270-a822e41ad6f4', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'LTS précédente, éprouvée.' },
+  ubuntu2004: { id: 'ubuntu2004', label: 'Ubuntu 20.04 LTS', family: 'ubuntu', image: '5161457d-381d-471e-9c09-98cf32e75c42', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'LTS ancienne, pour compatibilité.' },
+  debian11: { id: 'debian11', label: 'Debian 11 (Bullseye)', family: 'debian', image: 'f2ca2562-4131-434b-a6fa-db2cca6983f5', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Debian précédente, très stable.' },
+  alma9: { id: 'alma9', label: 'AlmaLinux 9', family: 'alma', image: 'fda22b17-93db-4e3e-8b05-37124f2e92a2', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 9 (successeur de CentOS).' },
+  alma8: { id: 'alma8', label: 'AlmaLinux 8', family: 'alma', image: '4a74c7b7-e964-4766-9e6e-187990f8d7ea', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 8.' },
+  rocky9: { id: 'rocky9', label: 'Rocky Linux 9', family: 'rocky', image: '48ff5b63-df3d-4719-9d9b-93465ae091d4', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 9 (successeur de CentOS).' },
+  rocky8: { id: 'rocky8', label: 'Rocky Linux 8', family: 'rocky', image: '5542ea9f-adb4-4237-82e7-4b92a84b15e2', sshUser: 'root', connect: 'ssh', minStorageGb: 40, description: 'Compatible RHEL 8.' },
+  // Windows : aucune image gold gratuite sur le site EU → image MARKET (payante). Connexion
+  // RDP ; mot de passe Administrator posé au 1er boot via user_data (Cloudbase-init), déjà géré
+  // par provisionRequest. ⚠️ MASQUÉ (hidden) : l'image market doit d'abord être SOUSCRITE dans
+  // le Marketplace Huawei (sinon « 400 forbidden to use market image », confirmé en live).
+  // Dé-masquer après souscription + validation live, et mettre l'image_id souscrit ici.
+  windows2019: { id: 'windows2019', label: 'Windows Server 2019', family: 'windows', image: 'e5233d7b-d432-4506-9149-ee25567daa05', sshUser: 'Administrator', connect: 'rdp', minStorageGb: 40, hidden: true, description: 'Windows Server 2019 (RDP). Licence incluse (image payante).' },
 };
 
 // Bundles d'outils par cours, préinstallés via cloud-init au premier démarrage.

@@ -43,7 +43,9 @@ export interface CloudProvider {
   createSnapshot(volumeId: string, description: string): Promise<string>;
   describeSnapshot(snapshotId: string): Promise<SnapshotState>;
   deleteSnapshot(snapshotId: string): Promise<void>;
-  registerImageFromSnapshot(name, snapshotId, rootDevice, architecture): Promise<string>;
+  rollbackSnapshot(snapshotId, volumeId): Promise<void>;       // restore en place (EVS) — dormant (gated)
+  // Restauration « nouvelle VM » : voie async EVS→IMS (createVolumeFromSnapshot/createImageFromVolume,
+  // resolveJob) — dormante, gated real-name auth ; cible CBR (cf. docs/design-cbr-restore.md).
   // Métriques (Cloud Eye / CES) pour l'idle-stop
   maxCpuOverWindow(serverId: string, minutes: number): Promise<CpuStat | null>;
 }

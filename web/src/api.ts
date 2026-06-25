@@ -30,19 +30,6 @@ export const api = {
   presets: () => req<PresetCatalog>('/api/presets'),
 
   listRequests: () => req<{ requests: VmRequest[] }>('/api/requests').then((r) => r.requests),
-  createRequest: (
-    perf: string,
-    storage: string,
-    os: string,
-    purpose: string,
-    startDate: string | null,
-    endDate: string,
-    course = ''
-  ) =>
-    req<{ id: number }>('/api/requests', {
-      method: 'POST',
-      body: JSON.stringify({ perf, storage, os, purpose, startDate, endDate, course }),
-    }),
   createBatch: (
     vms: { name: string; perf: string; storage: string; os: string; purpose: string; startDate: string | null; endDate: string; course: string; snapshotId?: number | null }[],
     group?: { name: string }
@@ -76,6 +63,8 @@ export const api = {
     req<{ ok: true }>(`/api/requests/${id}/snapshot-on-delete`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   deleteSnapshot: (id: number, sid: number) =>
     req<{ ok: true }>(`/api/requests/${id}/snapshots/${sid}`, { method: 'DELETE' }),
+  rollbackSnapshot: (id: number, sid: number) =>
+    req<{ ok: true }>(`/api/requests/${id}/snapshots/${sid}/rollback`, { method: 'POST' }),
   start: (id: number) => req<{ ok: true }>(`/api/requests/${id}/start`, { method: 'POST' }),
   stop: (id: number) => req<{ ok: true }>(`/api/requests/${id}/stop`, { method: 'POST' }),
   reboot: (id: number) => req<{ ok: true }>(`/api/requests/${id}/reboot`, { method: 'POST' }),

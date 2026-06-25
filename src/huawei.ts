@@ -34,8 +34,8 @@ function endpoints(env: Env) {
   };
 }
 
-// État Huawei → vocabulaire portail (NORMALIZED_STATES dans cloud.ts).
-function normalizeState(s: string | undefined): string {
+// État Huawei → vocabulaire portail (NORMALIZED_STATES dans cloud.ts). Exporté pour test unitaire.
+export function normalizeState(s: string | undefined): string {
   switch ((s || '').toUpperCase()) {
     case 'ACTIVE': return 'running';
     case 'BUILD': case 'REBOOT': case 'HARD_REBOOT': case 'RESIZE': case 'VERIFY_RESIZE': return 'pending';
@@ -52,8 +52,8 @@ function b64(s: string): string {
 
 // Huawei renvoie les dates en UTC SANS suffixe 'Z' (ex. "2026-06-23T17:50:00.000000"),
 // ce qui fausse les calculs d'uptime (interprété en heure locale). On normalise en ISO
-// UTC : microsecondes → millisecondes + 'Z'.
-function utcIso(s: string | undefined): string | undefined {
+// UTC : microsecondes → millisecondes + 'Z'. Exporté pour test unitaire.
+export function utcIso(s: string | undefined): string | undefined {
   if (!s) return undefined;
   if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) return s;
   return s.replace(/(\.\d{3})\d+$/, '$1').replace(' ', 'T') + 'Z';
@@ -120,7 +120,7 @@ export function huawei(env: Env): CloudProvider {
         flavorRef: p.flavor,
         vpcid: env.HUAWEI_VPC_ID,
         nics: [{ subnet_id: env.HUAWEI_SUBNET_ID }],
-        root_volume: { volumetype: 'GPSSD', size: p.sizeGb },
+        root_volume: { volumetype: p.volumetype || 'GPSSD', size: p.sizeGb },
         security_groups: [{ id: env.HUAWEI_SECGROUP_ID }],
         key_name: p.keyName,
         count: 1,
@@ -234,25 +234,75 @@ export function huawei(env: Env): CloudProvider {
       await req(ep.evs, 'DELETE', `/v2/${pid}/cloudsnapshots/${snapshotId}`).catch(() => {});
     },
 
-    // ---- Restauration (IMS) ----------------------------------------------
-    // U6 : le chemin « snapshot → image relançable » diffère d'AWS (pas de
-    // RegisterImage direct depuis un snapshot EVS). Approche Huawei : créer un
-    // volume depuis le snapshot, puis une image système IMS depuis ce volume.
-    // À valider en live avant activation de la restauration.
-    async registerImageFromSnapshot(name: string, snapshotId: string, _rootDevice: string, _architecture: string): Promise<string> {
-      // 1) Volume depuis le snapshot.
-      const cv = await req(ep.evs, 'POST', `/v2/${pid}/cloudvolumes`, {
-        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', name: `gitvm-restore-${Date.now()}` } },
+    // ===== LEGACY / DEPRECATED (remplacé par CBR — cf. docs/design-cbr-restore.md) =====
+    // rollbackSnapshot / getVolumeStatus (rollback EVS en place) et createVolumeFromSnapshot /
+    // createImageFromVolume (IMS restore « nouvelle VM ») : approches prouvées NON-VIABLES sur le
+    // compte (in-use ; charged-image ; IMG.0026 real-name). INACTIVES (gated RESTORE_ENABLED=false,
+    // aucun flux actif). Conservées comme legacy jusqu'à l'implémentation CBR. NE PAS réutiliser.
+
+    // Restauration EN PLACE : rollback du snapshot sur son volume source (VM stoppée
+    // → volume non monté). Asynchrone côté Huawei (volume passe en 'rollbacking' →
+    // 'available') ; le suivi se fait via le statut du volume. Droits EVS uniquement.
+    async rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void> {
+      await req(ep.evs, 'POST', `/v2/${pid}/cloudsnapshots/${snapshotId}/rollback`, {
+        body: { rollback: { volume_id: volumeId } },
       });
-      const volumeId = cv?.volume?.id ?? cv?.id;
-      if (!volumeId) throw new Error('Restore: création du volume depuis snapshot échouée');
-      // 2) Image système IMS depuis le volume (action asynchrone → job/image_id).
-      const im = await req(ep.ims, 'POST', `/v2/cloudimages/action`, {
-        body: { name: name.slice(0, 64), volume_id: volumeId, os_version: 'Other Linux(64 bit)' },
+    },
+
+    // Statut EVS brut du volume (available | rollbacking | error_rollbacking | error…).
+    // Le réconciliateur s'en sert pour savoir quand le rollback est terminé (→ 'available').
+    async getVolumeStatus(volumeId: string): Promise<string> {
+      const v = await req(ep.evs, 'GET', `/v2/${pid}/cloudvolumes/${volumeId}`);
+      return v?.volume?.status ?? 'unknown';
+    },
+
+    // ---- Restauration async (EVS volume → IMS image → launch normal) -----
+    // Piloté par le réconciliateur (chaque create → job_id ; resolveJob résout job → id).
+    // ⚠️ U6 : forme exacte des réponses EVS/IMS à confirmer en live ; isolé ici.
+    async createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string> {
+      // EVS exige `size` (≥ taille du snapshot) même pour une création depuis snapshot,
+      // sinon « 400: invalid volume size! » (confirmé en live). On lit la taille du snapshot.
+      const s = await req(ep.evs, 'GET', `/v2/${pid}/cloudsnapshots/${snapshotId}`);
+      const size = s?.snapshot?.size;
+      if (!size) throw new Error('EVS create-volume: taille du snapshot introuvable');
+      const j = await req(ep.evs, 'POST', `/v2/${pid}/cloudvolumes`, {
+        body: { volume: { snapshot_id: snapshotId, volume_type: 'GPSSD', availability_zone: availabilityZone, size, name: `gitvm-restore-vol-${Date.now()}` } },
       });
-      const imageId = im?.image_id ?? im?.id;
-      if (!imageId) throw new Error('Restore: création image IMS échouée (U6 — à valider)');
-      return imageId;
+      const jobId = j?.job_id;
+      if (!jobId) throw new Error('EVS create-volume: pas de job_id');
+      return jobId;
+    },
+
+    async createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string> {
+      const j = await req(ep.ims, 'POST', `/v2/cloudimages/action`, {
+        body: { name: name.slice(0, 64), volume_id: volumeId, os_version: osVersion },
+      });
+      const jobId = j?.job_id;
+      if (!jobId) throw new Error('IMS create-image: pas de job_id');
+      return jobId;
+    },
+
+    async deleteVolume(volumeId: string): Promise<void> {
+      await req(ep.evs, 'DELETE', `/v2/${pid}/cloudvolumes/${volumeId}`).catch(() => {});
+    },
+
+    async deleteImage(imageId: string): Promise<void> {
+      await req(ep.ims, 'DELETE', `/v2/cloudimages/${imageId}`).catch(() => {});
+    },
+
+    async resolveJob(jobId: string, service: 'evs' | 'ims'): Promise<string | null> {
+      const host = service === 'evs' ? ep.evs : ep.ims;
+      const j = await req(host, 'GET', `/v1/${pid}/jobs/${jobId}`);
+      const status = j?.status;
+      if (status === 'SUCCESS') {
+        const ent = j?.entities ?? {};
+        const sub = ent?.sub_jobs?.[0]?.entities ?? {};
+        const id = service === 'evs' ? (ent.volume_id ?? sub.volume_id) : (ent.image_id ?? sub.image_id);
+        if (!id) throw new Error(`Job ${service} SUCCESS mais id introuvable`);
+        return id;
+      }
+      if (status === 'FAIL') throw new Error(`Job ${service} échoué: ${j?.fail_reason ?? 'raison inconnue'}`);
+      return null; // RUNNING / INIT
     },
 
     // ---- Métriques (Cloud Eye / CES) -------------------------------------

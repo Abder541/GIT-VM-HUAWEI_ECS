@@ -36,6 +36,12 @@ import {
   setRequestStatus,
   createVm,
   setServerId,
+  restoreToImage,
+  restoreToLaunch,
+  clearRestore,
+  startRollback,
+  setRollbackStep,
+  clearRollback,
   updateVm,
   deleteVm,
   clearCourseReady,
@@ -70,8 +76,6 @@ import {
   deleteSnapshotRowsForRequest,
   listUsers,
   setUserRole,
-  addComment,
-  listComments,
   setCourseReady,
   addNotification,
   notifyAdminsInApp,
@@ -93,6 +97,12 @@ const startInstance = (env: Env, serverId: string) => huawei(env).startInstance(
 const stopInstance = (env: Env, serverId: string) => huawei(env).stopInstance(serverId);
 const rebootInstance = (env: Env, serverId: string) => huawei(env).rebootInstance(serverId);
 const describeRootVolume = (env: Env, serverId: string) => huawei(env).describeRootVolume(serverId);
+
+// Restore = LEGACY / DEPRECATED (remplacé par CBR — cf. docs/design-cbr-restore.md).
+// GATÉ au niveau du compte (real-name auth requise). Ce flag UNIQUE désactive TOUS les flux actifs
+// de restore (provisionRequest `isRestore` + route rollback). Les pipelines IMS (new-VM) et rollback
+// EVS (en place) restent DORMANTS/legacy, inactifs. Repasser à true UNIQUEMENT après bascule CBR.
+const RESTORE_ENABLED = false;
 const createSnapshot = (env: Env, volumeId: string, description: string) => huawei(env).createSnapshot(volumeId, description);
 const describeSnapshot = (env: Env, snapshotId: string) => huawei(env).describeSnapshot(snapshotId);
 const deleteSnapshot = (env: Env, snapshotId: string) => huawei(env).deleteSnapshot(snapshotId);
@@ -217,7 +227,7 @@ function windowsHardeningLines(): string[] {
   ];
 }
 
-// Create the SSH key + EC2 instance for a request. Shared by approve + retry.
+// Create the SSH key + ECS instance for a request. Shared by approve + retry.
 // Windows VMs additionally get an Administrator password set via UserData and
 // stored encrypted (no SSH; the user connects over RDP).
 async function provisionRequest(env: Env, req: any): Promise<string> {
@@ -228,7 +238,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
 
   const c = huawei(env);
   const isWindows = os.connect === 'rdp';
-  const isRestore = !!req.restore_snapshot_id;
+  const isRestore = RESTORE_ENABLED && !!req.restore_snapshot_id;
   const hardeningOn = env.HARDENING !== 'false';
   let userData: string | undefined;
   let encPassword: string | null = null;
@@ -260,15 +270,22 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     }
   }
 
-  // Restauration : enregistre une image IMS depuis le snapshot et lance dessus.
-  let imageId = os.image;
-  let sizeGb = storage.sizeGb;
+  // Restauration : flux ASYNC (volume → image → launch) piloté par le réconciliateur.
+  // On crée le VOLUME depuis le snapshot, on stocke la VM en étape 'volume', puis on REND
+  // la main (le réconciliateur enchaîne image → launch). Le flux VM normal ci-dessous est inchangé.
   if (isRestore) {
+    const az = env.HUAWEI_AZ;
+    if (!az) throw new Error('Restauration indisponible : variable HUAWEI_AZ requise (AZ du volume)');
     const snap = await getSnapshot(env, req.restore_snapshot_id, req.user_email);
     if (!snap?.snapshot_id || snap.status !== 'completed') throw new Error('snapshot not ready for restore');
-    imageId = await c.registerImageFromSnapshot(`gitvm-restore-${req.id}`, snap.snapshot_id, snap.root_device ?? '/dev/vda', snap.architecture ?? 'x86_64');
-    sizeGb = Math.max(storage.sizeGb, snap.size_gb ?? 0);
+    const kpR = await c.createKeyPair(req.id, isWindows ? 'rsa' : 'ed25519');
+    const encKeyR = await encryptSecret(dataKey(env), kpR.privateKey);
+    const volJob = await c.createVolumeFromSnapshot(snap.snapshot_id, az);
+    await createVm(env, req.id, volJob, kpR.keyName, encKeyR, os.sshUser, os.connect, encPassword, 'volume');
+    return volJob;
   }
+  const imageId = os.image;
+  const sizeGb = storage.sizeGb;
 
   const kp = await c.createKeyPair(req.id, isWindows ? 'rsa' : 'ed25519');
   const encKey = await encryptSecret(dataKey(env), kp.privateKey);
@@ -279,6 +296,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     flavor: perf.flavor,
     imageId,
     sizeGb,
+    volumetype: storage.volumetype,
     userData,
     nameTag: req.name ? `${req.name}.${req.user_email.split('@')[0]}` : null,
   });
@@ -286,7 +304,7 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
   return jobId;
 }
 
-// Take an EBS snapshot of a VM's root volume (best-effort; used by auto-on-delete).
+// Take an EVS snapshot of a VM's root volume (best-effort; used by auto-on-delete).
 async function autoSnapshot(env: Env, requestId: number, owner: string, instanceId: string): Promise<void> {
   try {
     const rv = await describeRootVolume(env, instanceId);
@@ -376,48 +394,8 @@ app.get('/api/requests', apiAuth, async (c) => {
   return c.json({ requests: rows });
 });
 
-app.post('/api/requests', apiAuth, async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json().catch(() => ({}));
-  const perf = String(body.perf ?? '');
-  const storage = String(body.storage ?? '');
-  const os = String(body.os ?? '');
-  const purpose = String(body.purpose ?? '').trim();
-  const course = String(body.course ?? '');
-  if (!isValidPerf(perf) || !isValidStorage(storage) || !isValidOs(os) || !isValidCourse(course) || !purpose) {
-    return c.json({ error: 'invalid_request' }, 400);
-  }
-  // Some OS need a minimum root disk (Windows ≥ 30 Go).
-  const osDef = OS[os];
-  const storageDef = STORAGE[storage];
-  if (osDef.minStorageGb && storageDef.sizeGb < osDef.minStorageGb) {
-    return c.json({ error: 'storage_too_small' }, 400);
-  }
-  // Lifecycle dates: end date is MANDATORY ("aucune machine sans date de fin").
-  const now = Date.now();
-  const end = body.endDate ? new Date(String(body.endDate)) : null;
-  const start = body.startDate ? new Date(String(body.startDate)) : null;
-  if (!end || isNaN(end.getTime()) || end.getTime() <= now) {
-    return c.json({ error: 'invalid_end_date' }, 400);
-  }
-  if (start && (isNaN(start.getTime()) || start.getTime() >= end.getTime())) {
-    return c.json({ error: 'invalid_start_date' }, 400);
-  }
-  // Rate limit: max 5 requests per hour per user.
-  if ((await countRecentRequests(c.env, user.email, 60)) >= 5) {
-    return c.json({ error: 'rate_limited' }, 429, { 'Retry-After': '3600' });
-  }
-  const id = await createRequest(
-    c.env, user.email, purpose, perf, storage, os, c.env.HUAWEI_REGION,
-    start ? start.toISOString() : null, end.toISOString(), course || null
-  );
-  await audit(c.env, user.email, 'request.create', `req:${id}`, `${perf}/${storage}/${os}${course ? `/${course}` : ''} end:${end.toISOString()}`);
-  await notifyAdminsInApp(c.env, 'request_new', `/requests/${id}`);
-  c.executionCtx.waitUntil(notifyAdminsNewRequest(c.env, id, user.email, PERF[perf].label));
-  return c.json({ id }, 201);
-});
-
 // Batch creation: 1–4 individually-configured VMs, optionally in a named group.
+// Voie UNIQUE de création (le SPA passe toujours par batch, même pour 1 VM).
 app.post('/api/requests/batch', apiAuth, async (c) => {
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
@@ -464,7 +442,7 @@ app.post('/api/requests/batch', apiAuth, async (c) => {
 app.delete('/api/requests/:id', apiAuth, async (c) => {
   const user = c.get('user');
   const id = Number(c.req.param('id'));
-  // Capture snapshots before the row is gone, then cascade-delete them (AWS + DB).
+  // Capture snapshots before the row is gone, then cascade-delete them (Huawei + DB).
   const snaps = await listSnapshotsForRequest(c.env, id);
   const ok = await deleteRequest(c.env, user.email, id);
   if (!ok) return c.json({ error: 'not_deletable' }, 409);
@@ -778,7 +756,7 @@ app.post('/api/requests/:id/reset', apiAuth, async (c) => {
   }
 });
 
-// ---- Snapshots (EBS) ----------------------------------------------------
+// ---- Snapshots (EVS) ----------------------------------------------------
 app.post('/api/requests/:id/snapshot', apiAuth, async (c) => {
   const id = Number(c.req.param('id'));
   const ctx = await authorizeVm(c, id);
@@ -820,7 +798,7 @@ app.post('/api/requests/:id/snapshot-on-delete', apiAuth, async (c) => {
   return c.json({ ok: true });
 });
 
-// Delete one snapshot (AWS EBS snapshot + DB row).
+// Delete one snapshot (Huawei EVS snapshot + DB row).
 app.delete('/api/requests/:id/snapshots/:sid', apiAuth, async (c) => {
   const user = c.get('user');
   const id = Number(c.req.param('id'));
@@ -835,7 +813,33 @@ app.delete('/api/requests/:id/snapshots/:sid', apiAuth, async (c) => {
   return c.json({ ok: true });
 });
 
-// Live AWS state (state + public IP + uptime) — used by the detail page.
+// Restauration EN PLACE : rollback de la VM vers un snapshot EVS (destructif).
+// Piloté ensuite par le réconciliateur (stopping → rollingback → starting).
+app.post('/api/requests/:id/snapshots/:sid/rollback', apiAuth, async (c) => {
+  if (!RESTORE_ENABLED) return c.json({ error: 'restore_gated' }, 403); // garde : restore gated (cf. RESTORE_ENABLED)
+  const user = c.get('user');
+  const id = Number(c.req.param('id')), sid = Number(c.req.param('sid'));
+  const ctx = await authorizeVm(c, id);
+  if (!ctx) return c.json({ error: 'not_found' }, 404);
+  if (!ctx.vm?.server_id) return c.json({ error: 'no_instance' }, 400);
+  if (ctx.r.expired_at) return c.json({ error: 'expired' }, 409);
+  if (ctx.vm.rollback_step) return c.json({ error: 'rollback_in_progress' }, 409);
+  const snap = await getSnapshot(c.env, sid, ctx.r.user_email);
+  if (!snap || snap.request_id !== id) return c.json({ error: 'not_found' }, 404);
+  if (snap.status !== 'completed' || !snap.snapshot_id) return c.json({ error: 'snapshot_not_ready' }, 409);
+  try {
+    const rv = await describeRootVolume(c.env, ctx.vm.server_id);
+    if (!rv.volumeId) return c.json({ error: 'no_volume' }, 400);
+    await stopInstance(c.env, ctx.vm.server_id);
+    await updateVm(c.env, id, 'stopping');
+    if (ctx.r.schedule_enabled) await setSchedulePaused(c.env, id, true);
+    await startRollback(c.env, id, snap.snapshot_id, rv.volumeId);
+    await audit(c.env, user.email, 'vm.rollback', `req:${id}`, snap.snapshot_id);
+    return c.json({ ok: true });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// Live Huawei state (state + public IP + uptime) — used by the detail page.
 app.get('/api/requests/:id/live', apiAuth, async (c) => {
   const id = Number(c.req.param('id'));
   const ctx = await authorizeVm(c, id);
@@ -861,30 +865,6 @@ app.post('/api/internal/course-done', async (c) => {
   await setCourseReady(c.env, id);
   await audit(c.env, 'system', 'course.ready', `req:${id}`);
   return c.json({ ok: true });
-});
-
-// ---- Comments (owner + admins) -----------------------------------------
-app.get('/api/requests/:id/comments', apiAuth, async (c) => {
-  const user = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  if (r.user_email !== user.email && user.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
-  return c.json({ comments: await listComments(c.env, id) });
-});
-
-app.post('/api/requests/:id/comments', apiAuth, async (c) => {
-  const user = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  if (r.user_email !== user.email && user.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
-  const body = await c.req.json().catch(() => ({}));
-  const text = String(body.body ?? '').trim().slice(0, 2000);
-  if (!text) return c.json({ error: 'empty' }, 400);
-  await addComment(c.env, id, user.email, text);
-  await audit(c.env, user.email, 'comment.add', `req:${id}`);
-  return c.json({ ok: true }, 201);
 });
 
 // ---- Admin API ----------------------------------------------------------
@@ -1119,27 +1099,21 @@ app.get('/api/monitoring/:metric', async (c) => {
   return c.json({ error: 'unknown_metric' }, 404);
 });
 
-// Admin proposes a change to the request: posts a message (comment) + notifies the user.
-app.post('/api/admin/requests/:id/suggest', apiAdmin, async (c) => {
-  const admin = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  const body = await c.req.json().catch(() => ({}));
-  const note = String(body.note ?? '').trim().slice(0, 2000);
-  if (!note) return c.json({ error: 'empty' }, 400);
-  await addComment(c.env, id, admin.email, `[Proposition de modification] ${note}`);
-  await addNotification(c.env, r.user_email, 'suggestion', `/requests/${id}`);
-  await audit(c.env, admin.email, 'request.suggest', `req:${id}`);
-  return c.json({ ok: true });
-});
-
 // ---- Static assets (React SPA) -----------------------------------------
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 
 // ---- Scheduled: reconcile state + scheduled stop ------------------------
-// Reconcile DB against AWS: promote provisioning->active, sync running/stopped
+// Reconcile DB against Huawei: promote provisioning->active, sync running/stopped
 // state, and detect drift (instances terminated outside the portal).
+// OS du snapshot → os_version IMS (pour la création d'image de restauration).
+function imsOsVersion(osId: string | null | undefined): string {
+  const fam = osId ? OS[osId]?.family : undefined;
+  if (fam === 'ubuntu') return 'Ubuntu';
+  if (fam === 'debian') return 'Debian';
+  if (fam === 'windows') return 'Windows';
+  return 'Other Linux(64 bit)';
+}
+
 async function reconcile(env: Env): Promise<void> {
   const c = huawei(env);
   let managed: Record<string, string>;
@@ -1151,6 +1125,81 @@ async function reconcile(env: Env): Promise<void> {
   const rows = await listActiveVms(env);
   for (const row of rows) {
     try {
+      // ---- Pré-vol RESTAURATION — LEGACY/DEPRECATED (IMS, remplacé par CBR) ----
+      // INACTIF : restore_step n'est jamais positionné (entrée gated RESTORE_ENABLED=false). Dormant.
+      if (row.restore_step === 'volume') {
+        const volumeId = await c.resolveJob(row.provider_job_id!, 'evs');
+        if (!volumeId) continue; // volume en cours de création
+        const r = await getRequest(env, row.id);
+        if (!r) throw new Error('restore: demande introuvable');
+        const imgJob = await c.createImageFromVolume(`gitvm-restore-${row.id}`, volumeId, imsOsVersion(r.os));
+        await restoreToImage(env, row.id, volumeId, imgJob);
+        await audit(env, 'system', 'restore.volume.ready', `req:${row.id}`, volumeId);
+        continue;
+      }
+      if (row.restore_step === 'image') {
+        const imageId = await c.resolveJob(row.provider_job_id!, 'ims');
+        if (!imageId) continue; // image en cours de création
+        if (row.restore_volume_id) await c.deleteVolume(row.restore_volume_id); // anti-orphelin : volume devenu inutile
+        const r = await getRequest(env, row.id);
+        if (!r) throw new Error('restore: demande introuvable');
+        const perf = PERF[r.preset];
+        const storage = STORAGE[r.storage ?? ''];
+        if (!perf || !storage) throw new Error('restore: preset/storage invalide');
+        const h = await c.launchInstance({
+          requestId: row.id,
+          keyName: row.ssh_key_name ?? `vm-portal-req-${row.id}`,
+          flavor: perf.flavor,
+          imageId,
+          sizeGb: storage.sizeGb,
+          volumetype: storage.volumetype,
+          nameTag: r.name ? `${r.name}.${r.user_email.split('@')[0]}` : null,
+        });
+        await restoreToLaunch(env, row.id, imageId, h.jobId);
+        await audit(env, 'system', 'restore.image.ready', `req:${row.id}`, imageId);
+        continue;
+      }
+
+      // ---- Pré-vol ROLLBACK EN PLACE — LEGACY/DEPRECATED (EVS, remplacé par CBR) ----
+      // INACTIF : rollback_step n'est jamais positionné (route gated RESTORE_ENABLED=false). Dormant.
+      // Machine à états : stopping → rollingback → starting, conduite par le réconciliateur.
+      if (row.rollback_step) {
+        const serverId = row.server_id;
+        if (!serverId) { await clearRollback(env, row.id); continue; }
+        if (row.rollback_step === 'stopping') {
+          const s = await describeInstance(env, serverId);
+          if (s.state === 'error') throw new Error('VM en erreur pendant l\'arrêt');
+          if (s.state !== 'stopped') { if (s.state !== row.state) await updateVm(env, row.id, s.state); continue; }
+          await c.rollbackSnapshot(row.rollback_snapshot_id!, row.rollback_volume_id!);
+          await setRollbackStep(env, row.id, 'rollingback');
+          await audit(env, 'system', 'vm.rollback.started', `req:${row.id}`, row.rollback_snapshot_id ?? '');
+          continue;
+        }
+        if (row.rollback_step === 'rollingback') {
+          const vs = await c.getVolumeStatus(row.rollback_volume_id!);
+          if (vs === 'available') {
+            await startInstance(env, serverId);
+            await setRollbackStep(env, row.id, 'starting');
+            await audit(env, 'system', 'vm.rollback.volume.restored', `req:${row.id}`, row.rollback_volume_id ?? '');
+          } else if (vs === 'error' || vs === 'error_rollbacking') {
+            throw new Error(`rollback EVS échoué (volume ${vs})`);
+          }
+          continue;
+        }
+        if (row.rollback_step === 'starting') {
+          const s = await describeInstance(env, serverId);
+          if (s.state === 'running' && s.publicIp) {
+            await updateVm(env, row.id, 'running', s.publicIp);
+            // La pause posée au lancement du rollback n'était qu'un garde transitoire :
+            // on restaure l'invariant planning (sinon la VM tournerait 24/7 hors planning).
+            if (row.schedule_enabled) await setSchedulePaused(env, row.id, false);
+            await clearRollback(env, row.id);
+            await audit(env, 'system', 'vm.rollback.done', `req:${row.id}`, serverId);
+          } else { await updateVm(env, row.id, s.state); }
+          continue;
+        }
+      }
+
       // Modèle asynchrone : résoudre job_id → server_id s'il n'est pas encore connu.
       if (!row.server_id) {
         if (!row.provider_job_id) continue;
@@ -1158,6 +1207,11 @@ async function reconcile(env: Env): Promise<void> {
         if (!resolved) continue; // job encore en cours
         await setServerId(env, row.id, resolved);
         await audit(env, 'system', 'vm.job.resolved', `req:${row.id}`, resolved);
+        // Restauration : VM démarrée → image IMS transitoire inutile (anti-orphelin).
+        if (row.restore_step === 'launch') {
+          if (row.restore_image_id) await c.deleteImage(row.restore_image_id);
+          await clearRestore(env, row.id);
+        }
         row.server_id = resolved;
       }
       const serverId = row.server_id;
@@ -1213,6 +1267,20 @@ async function reconcile(env: Env): Promise<void> {
         }
       }
     } catch (e: any) {
+      // Restauration : nettoyage des ressources transitoires en cas d'échec (anti-orphelin).
+      if (row.restore_step) {
+        if (row.restore_volume_id) await c.deleteVolume(row.restore_volume_id).catch(() => {});
+        if (row.restore_image_id) await c.deleteImage(row.restore_image_id).catch(() => {});
+        await setRequestStatus(env, row.id, 'failed', undefined, `restore: ${e.message}`).catch(() => {});
+        await clearRestore(env, row.id).catch(() => {});
+      }
+      // Rollback en place : échec → tentative de redémarrage best-effort + on efface l'état
+      // (la demande reste 'active', pas de blocage). Garde-fou par rollback_step NULL.
+      if (row.rollback_step) {
+        if (row.server_id) await startInstance(env, row.server_id).catch(() => {});
+        if (row.schedule_enabled) await setSchedulePaused(env, row.id, false).catch(() => {});
+        await clearRollback(env, row.id).catch(() => {});
+      }
       await audit(env, 'system', 'vm.reconcile.error', `req:${row.id}`, e.message);
     }
   }
@@ -1260,7 +1328,7 @@ async function scheduledStop(env: Env): Promise<void> {
   }
 }
 
-// Auto-stop VMs idle (low CPU) for IDLE_STOP_HOURS. Best-effort; needs CloudWatch read.
+// Auto-stop VMs idle (low CPU) for IDLE_STOP_HOURS. Best-effort; needs Cloud Eye (CES) read.
 // The user can restart from the portal at any time.
 async function enforceIdleStop(env: Env): Promise<void> {
   if (env.IDLE_STOP !== 'true') return;
@@ -1278,7 +1346,7 @@ async function enforceIdleStop(env: Env): Promise<void> {
         await audit(env, 'system', 'vm.idle_stop', `req:${vm.id}`, `cpuMax=${cpu.max.toFixed(1)}%`);
       }
     } catch {
-      /* skip this tick (e.g. CloudWatch permission missing) */
+      /* skip this tick (e.g. Cloud Eye/CES permission missing) */
     }
   }
 }
@@ -1332,7 +1400,7 @@ async function enforceExpiry(env: Env): Promise<void> {
   }
 }
 
-// Poll pending EBS snapshots and mark them completed/error.
+// Poll pending EVS snapshots and mark them completed/error.
 async function syncSnapshots(env: Env): Promise<void> {
   for (const s of await listPendingSnapshots(env)) {
     try {

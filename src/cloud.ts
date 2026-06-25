@@ -38,6 +38,8 @@ export interface LaunchParams {
   imageId: string;
   /** Taille du volume racine EVS, en Go. */
   sizeGb: number;
+  /** Type de volume EVS racine (GPSSD / SSD / SAS…). Défaut implémentation : GPSSD. */
+  volumetype?: string;
   /** Script de bootstrap au 1er démarrage (cloud-init Linux / EC2Launch-like Windows). */
   userData?: string;
   /** Nom lisible → tag `Name` de la VM (repli : `vm-portal-req-<id>`). */
@@ -137,13 +139,25 @@ export interface CloudProvider {
   createSnapshot(volumeId: string, description: string): Promise<string>;
   describeSnapshot(snapshotId: string): Promise<SnapshotState>;
   deleteSnapshot(snapshotId: string): Promise<void>;
-  /** Enregistre une image (IMS) depuis un snapshot pour relancer une VM (restore). */
-  registerImageFromSnapshot(
-    name: string,
-    snapshotId: string,
-    rootDevice: string,
-    architecture: string
-  ): Promise<string>;
+  // ===== LEGACY / DEPRECATED — remplacé par CBR (cf. docs/design-cbr-restore.md) ============
+  // Deux approches de restore PROUVÉES NON-VIABLES sur le compte (IMS image-from-volume →
+  // « charged image cannot be exported » ; whole-image → IMG.0026 real-name ; rollback EVS →
+  // volume « in-use »). Conservées comme LEGACY, INACTIVES : gated `RESTORE_ENABLED=false`,
+  // aucun flux actif ne les appelle (prouvé : seuls appelants = branches gated). Ne pas réutiliser ;
+  // à retirer/remplacer une fois CBR implémenté (real-name auth gated).
+  /** @deprecated LEGACY — rollback EVS en place (bloqué « in-use »). Remplacé par CBR. Inactif (gated). */
+  rollbackSnapshot(snapshotId: string, volumeId: string): Promise<void>;
+  /** @deprecated LEGACY — suivi du rollback EVS. Remplacé par CBR. Inactif (gated). */
+  getVolumeStatus(volumeId: string): Promise<string>;
+  /** @deprecated LEGACY — IMS restore : volume depuis snapshot. Remplacé par CBR. Inactif (gated). */
+  createVolumeFromSnapshot(snapshotId: string, availabilityZone: string): Promise<string>; // → jobId
+  /** @deprecated LEGACY — IMS restore : image depuis volume (bloqué charged-image). Remplacé par CBR. */
+  createImageFromVolume(name: string, volumeId: string, osVersion: string): Promise<string>; // → jobId
+  // ===== fin LEGACY =====
+  deleteVolume(volumeId: string): Promise<void>;
+  deleteImage(imageId: string): Promise<void>;
+  /** Résout un job EVS/IMS → id de ressource (volume_id/image_id) ; null si en cours. */
+  resolveJob(jobId: string, service: 'evs' | 'ims'): Promise<string | null>;
 
   // ---- Métriques (Huawei Cloud Eye / CES) pour l'arrêt sur inactivité -----
   maxCpuOverWindow(serverId: string, minutes: number): Promise<CpuStat | null>;

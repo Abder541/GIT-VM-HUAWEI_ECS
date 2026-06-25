@@ -219,6 +219,18 @@ export async function listSnapshotsForUser(env: Env, owner: string): Promise<Sna
   return res.results ?? [];
 }
 
+// Tous les snapshots (vue admin) + nom de la VM d'origine.
+export async function listAllSnapshots(env: Env, limit = 200): Promise<(SnapshotRow & { vm_name: string | null })[]> {
+  const res = await env.DB.prepare(
+    `SELECT s.*, r.name AS vm_name
+       FROM snapshots s LEFT JOIN vm_requests r ON r.id = s.request_id
+      ORDER BY s.created_at DESC LIMIT ?1`
+  )
+    .bind(limit)
+    .all<SnapshotRow & { vm_name: string | null }>();
+  return res.results ?? [];
+}
+
 export async function getSnapshot(env: Env, id: number, owner: string): Promise<SnapshotRow | null> {
   return await env.DB.prepare(`SELECT * FROM snapshots WHERE id = ?1 AND user_email = ?2`).bind(id, owner).first<SnapshotRow>();
 }
@@ -433,12 +445,23 @@ function sqliteToMs(s: string): number {
 
 // VMs (métadonnées) + events d'allumage (target `req:<id>`), pour le rapport de coût.
 export async function listCostData(env: Env): Promise<{
-  vms: { id: number; user_email: string; name: string | null; preset: string; storage: string | null; status: string }[];
+  vms: {
+    id: number; user_email: string; name: string | null; preset: string; storage: string | null;
+    status: string; endDate: number | null; expiredAt: number | null;
+  }[];
   events: { req: number; action: string; at: number }[];
 }> {
   const vmsRes = await env.DB.prepare(
-    `SELECT id, user_email, name, preset, storage, status FROM vm_requests`
-  ).all<{ id: number; user_email: string; name: string | null; preset: string; storage: string | null; status: string }>();
+    `SELECT id, user_email, name, preset, storage, status, end_date, expired_at FROM vm_requests`
+  ).all<{
+    id: number; user_email: string; name: string | null; preset: string; storage: string | null;
+    status: string; end_date: string | null; expired_at: string | null;
+  }>();
+  const vms = (vmsRes.results ?? []).map((r) => ({
+    id: r.id, user_email: r.user_email, name: r.name, preset: r.preset, storage: r.storage, status: r.status,
+    endDate: r.end_date ? sqliteToMs(r.end_date) : null,
+    expiredAt: r.expired_at ? sqliteToMs(r.expired_at) : null,
+  }));
 
   const ph = COST_EVENT_ACTIONS.map((_, i) => `?${i + 1}`).join(',');
   const evRes = await env.DB.prepare(
@@ -453,7 +476,7 @@ export async function listCostData(env: Env): Promise<{
     .map((e) => ({ req: Number(e.target.slice(4)), action: e.action, at: sqliteToMs(e.created_at) }))
     .filter((e) => Number.isFinite(e.req) && Number.isFinite(e.at));
 
-  return { vms: vmsRes.results ?? [], events };
+  return { vms, events };
 }
 
 export async function countByStatus(env: Env): Promise<Record<string, number>> {

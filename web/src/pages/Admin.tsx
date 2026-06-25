@@ -9,7 +9,7 @@ import { fmtDate } from '../lib/format';
 import { UsersPanel } from '../components/UsersPanel';
 import { VmConsole } from '../components/VmConsole';
 
-type Tab = 'overview' | 'vms' | 'users' | 'cost' | 'monitoring';
+type Tab = 'overview' | 'vms' | 'users' | 'cost' | 'snapshots' | 'monitoring';
 
 /* ---------- shared bits ---------- */
 function StatCard({ label, value, dot }: { label: string; value: number; dot: string }) {
@@ -51,6 +51,7 @@ const ICONS: Record<Tab, string> = {
   vms: 'M5 4h14a2 2 0 0 1 2 2v3H3V6a2 2 0 0 1 2-2zM3 15h18v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM7 7h.01M7 18h.01',
   users: 'M16 21v-2a4 4 0 0 0-8 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   cost: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
+  snapshots: 'M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
   monitoring: 'M22 12h-4l-3 9L9 3l-3 9H2',
 };
 
@@ -77,6 +78,7 @@ export function Admin() {
     { id: 'vms', label: t('admin.navVms'), badge: pending },
     { id: 'users', label: t('admin.navUsers') },
     { id: 'cost', label: t('admin.navCost') },
+    { id: 'snapshots', label: t('admin.navSnapshots') },
     { id: 'monitoring', label: t('admin.navMonitoring') },
   ];
 
@@ -116,6 +118,7 @@ export function Admin() {
           {tab === 'vms' && <VmConsole rows={rows} loading={allQ.isLoading} catalog={catalog} />}
           {tab === 'users' && <UsersSection rows={rows} />}
           {tab === 'cost' && <CostSection />}
+          {tab === 'snapshots' && <SnapshotsSection />}
           {tab === 'monitoring' && <MonitoringSection grafanaUrl={catalog?.grafanaUrl} />}
         </div>
       </div>
@@ -216,7 +219,13 @@ function CostSection() {
   const costQ = useQuery({ queryKey: ['admin-cost'], queryFn: api.adminCost, refetchInterval: 30000 });
   const d = costQ.data;
   if (!d) return <p className="py-10 text-center text-sm text-muted-foreground">…</p>;
-  const maxDay = Math.max(1, ...d.perDay.map((x) => x.eur));
+  // Timeline complète sur 30 jours (jours sans coût = 0) pour un vrai graphe.
+  const byDate = new Map(d.perDay.map((x) => [x.date, x.eur]));
+  const series = Array.from({ length: 30 }, (_, i) => {
+    const date = new Date(Date.now() - (29 - i) * 86_400_000).toISOString().slice(0, 10);
+    return { date, eur: byDate.get(date) ?? 0 };
+  });
+  const maxDay = Math.max(0.01, ...series.map((x) => x.eur));
   return (
     <div className="space-y-6">
       <SectionTitle title={t('admin.navCost')} hint={t('admin.costPageHint')} />
@@ -228,29 +237,30 @@ function CostSection() {
         <MetricCard label={t('admin.costFleetMonthly')} value={fmtEur(d.fleetMonthlyEur)} />
       </div>
 
-      {d.perDay.length > 0 && (
-        <Card className="p-5">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerDay')}</h3>
-          <div className="flex h-40 items-end gap-1">
-            {d.perDay.map((x) => (
+      <Card className="p-5">
+        <div className="mb-3 flex items-baseline justify-between">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerDay')}</h3>
+          <span className="text-[10px] text-muted-foreground/70">max {fmtEur(maxDay)}</span>
+        </div>
+        <div className="flex h-40 items-end gap-px">
+          {series.map((x) => (
+            <div
+              key={x.date}
+              className="group flex flex-1 flex-col justify-end"
+              title={`${x.date} · ${fmtEur(x.eur)}`}
+            >
               <div
-                key={x.date}
-                className="group flex flex-1 flex-col items-center justify-end"
-                title={`${x.date} · ${fmtEur(x.eur)}`}
-              >
-                <div
-                  className="w-full rounded-t bg-emerald-500/70 transition group-hover:bg-emerald-500"
-                  style={{ height: `${Math.max(2, (x.eur / maxDay) * 100)}%` }}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
-            <span>{d.perDay[0]?.date}</span>
-            <span>{d.perDay[d.perDay.length - 1]?.date}</span>
-          </div>
-        </Card>
-      )}
+                className={`w-full rounded-t transition ${x.eur > 0 ? 'bg-emerald-500/70 group-hover:bg-emerald-500' : 'bg-muted'}`}
+                style={{ height: x.eur > 0 ? `${Math.max(3, (x.eur / maxDay) * 100)}%` : '2px' }}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
+          <span>{series[0].date}</span>
+          <span>{series[series.length - 1].date}</span>
+        </div>
+      </Card>
 
       <Card className="p-5">
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerUser')}</h3>
@@ -304,6 +314,59 @@ function CostSection() {
       </Card>
 
       <p className="text-xs text-muted-foreground">{t('admin.costDisclaimer')}</p>
+    </div>
+  );
+}
+
+/* ---------- Snapshots (vue globale) ---------- */
+const snapTone = (s: string) => {
+  if (/(complete|available|active|success)/i.test(s)) return 'text-emerald-600 dark:text-emerald-400';
+  if (/(pending|creating|progress)/i.test(s)) return 'text-amber-600 dark:text-amber-400';
+  if (/(error|fail)/i.test(s)) return 'text-red-600 dark:text-red-400';
+  return 'text-muted-foreground';
+};
+
+function SnapshotsSection() {
+  const { t } = useTranslation();
+  const snapsQ = useQuery({ queryKey: ['admin-snapshots'], queryFn: api.adminSnapshots, refetchInterval: 30000 });
+  const snaps = snapsQ.data;
+  if (!snaps) return <p className="py-10 text-center text-sm text-muted-foreground">…</p>;
+  return (
+    <div className="space-y-6">
+      <SectionTitle title={t('admin.navSnapshots')} hint={t('admin.snapHint')} />
+      <Card className="p-5">
+        {snaps.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">{t('admin.noSnap')}</p>
+        ) : (
+          <div className="max-h-[32rem] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="pb-2 font-medium">{t('admin.snapVm')}</th>
+                  <th className="pb-2 font-medium">{t('admin.snapUser')}</th>
+                  <th className="pb-2 font-medium">{t('admin.snapDesc')}</th>
+                  <th className="pb-2 font-medium">{t('admin.snapStatus')}</th>
+                  <th className="pb-2 text-right font-medium">{t('admin.snapSize')}</th>
+                  <th className="pb-2 text-right font-medium">{t('admin.snapDate')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {snaps.map((s) => (
+                  <tr key={s.id} className="border-t border-border/60">
+                    <td className="py-1.5 font-medium">{s.vm_name || `#${s.request_id ?? '?'}`}</td>
+                    <td className="max-w-[12rem] truncate py-1.5 text-muted-foreground">{s.user_email}</td>
+                    <td className="max-w-[14rem] truncate py-1.5 text-muted-foreground">{s.description || '—'}</td>
+                    <td className={`py-1.5 font-mono text-xs ${snapTone(s.status)}`}>{s.status}</td>
+                    <td className="py-1.5 text-right tabular-nums text-muted-foreground">{s.size_gb ? `${s.size_gb} Go` : '—'}</td>
+                    <td className="py-1.5 text-right text-xs text-muted-foreground/70">{fmtDate(s.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <p className="text-xs text-muted-foreground">{t('admin.snapDisclaimer')}</p>
     </div>
   );
 }

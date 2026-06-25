@@ -29,7 +29,7 @@ Deux briques complémentaires :
 
 | Env | Branche | Worker | D1 | Domaine |
 |---|---|---|---|---|
-| **Production** | `main` | `git-vm-huawei` | `git_vm_huawei` | `*.workers.dev` (puis domaine custom) |
+| **Production** | `main` | `git-vm-portal-huawei` | `git_vm_portal_huawei` (`bfc2962a-…`) | `git-vm-portal-huawei.…workers.dev` (puis domaine custom) |
 | **Preview** *(option)* | PR | preview Worker éphémère | D1 preview ou local | URL de preview Cloudflare |
 
 > Séparer prod et preview évite de tester sur la base de prod. Phase « plateforme avancée ».

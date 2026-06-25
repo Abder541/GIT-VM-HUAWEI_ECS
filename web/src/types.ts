@@ -99,6 +99,31 @@ export interface Notification {
   read: number;
   created_at: string;
 }
+export interface VmCost {
+  id: number;
+  user: string;
+  name: string | null;
+  preset: string;
+  storage: string | null;
+  running: boolean;
+  runningHours: number;
+  lifetimeHours: number;
+  computeEur: number;
+  storageEur: number;
+  eur: number;
+  since: number | null;
+  until: number | null;
+}
+export interface CostReport {
+  totalEur: number;
+  computeEur: number;
+  storageEur: number;
+  activeVms: number;
+  fleetMonthlyEur: number;
+  perUser: { email: string; vms: number; eur: number }[];
+  perVm: VmCost[];
+  perDay: { date: string; eur: number }[];
+}
 export interface Snapshot {
   id: number;
   request_id: number | null;

@@ -18,6 +18,7 @@ import {
   STORAGE_EUR_GB_MONTH,
 } from './presets';
 import { reportError } from './sentry';
+import { assembleVms, computeCostReport } from './cost';
 import {
   upsertUser,
   audit,
@@ -33,6 +34,7 @@ import {
   countByOs,
   countByUser,
   listActiveForCost,
+  listCostData,
   setRequestStatus,
   createVm,
   setServerId,
@@ -880,6 +882,13 @@ app.get('/api/admin/stats', apiAdmin, async (c) => {
 
 app.get('/api/admin/metrics', apiAdmin, async (c) => {
   return c.json({ metrics: await metrics(c.env) });
+});
+
+// Rapport de coût « heures réelles » (Modèle B) : compute facturé sur les périodes
+// d'allumage reconstituées depuis l'audit, stockage sur la durée de vie. Cf. src/cost.ts.
+app.get('/api/admin/cost', apiAdmin, async (c) => {
+  const { vms, events } = await listCostData(c.env);
+  return c.json(computeCostReport(assembleVms(vms, events), Date.now()));
 });
 
 app.get('/api/admin/users', apiAdmin, async (c) => {

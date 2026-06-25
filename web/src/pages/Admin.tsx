@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { AuditEntry, Metrics, VmRequest } from '../types';
 import { Card } from '../ui';
@@ -242,7 +243,7 @@ function CostSection() {
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerDay')}</h3>
           <span className="text-[10px] text-muted-foreground/70">max {fmtEur(maxDay)}</span>
         </div>
-        <div className="flex h-40 items-end gap-px">
+        <div className="flex h-40 items-stretch gap-px">
           {series.map((x) => (
             <div
               key={x.date}
@@ -298,7 +299,7 @@ function CostSection() {
                 {d.perVm.map((v) => (
                   <tr key={v.id} className="border-t border-border/60">
                     <td className="py-1.5">
-                      <span className="font-medium">{v.name || `#${v.id}`}</span>
+                      <Link to={`/requests/${v.id}`} className="font-medium hover:underline">{v.name || `#${v.id}`}</Link>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground">{v.preset}</span>
                       {v.running && <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 align-middle" title="active" />}
                     </td>
@@ -348,17 +349,38 @@ function SnapshotsSection() {
                   <th className="pb-2 font-medium">{t('admin.snapStatus')}</th>
                   <th className="pb-2 text-right font-medium">{t('admin.snapSize')}</th>
                   <th className="pb-2 text-right font-medium">{t('admin.snapDate')}</th>
+                  <th className="pb-2 text-right font-medium">{t('admin.snapActions')}</th>
                 </tr>
               </thead>
               <tbody>
                 {snaps.map((s) => (
                   <tr key={s.id} className="border-t border-border/60">
-                    <td className="py-1.5 font-medium">{s.vm_name || `#${s.request_id ?? '?'}`}</td>
+                    <td className="py-1.5 font-medium">
+                      {s.request_id ? (
+                        <Link to={`/requests/${s.request_id}`} className="hover:underline">{s.vm_name || `#${s.request_id}`}</Link>
+                      ) : (
+                        s.vm_name || '—'
+                      )}
+                    </td>
                     <td className="max-w-[12rem] truncate py-1.5 text-muted-foreground">{s.user_email}</td>
-                    <td className="max-w-[14rem] truncate py-1.5 text-muted-foreground">{s.description || '—'}</td>
+                    <td className="max-w-[14rem] truncate py-1.5 text-muted-foreground" title={s.snapshot_id ?? undefined}>{s.description || '—'}</td>
                     <td className={`py-1.5 font-mono text-xs ${snapTone(s.status)}`}>{s.status}</td>
                     <td className="py-1.5 text-right tabular-nums text-muted-foreground">{s.size_gb ? `${s.size_gb} Go` : '—'}</td>
                     <td className="py-1.5 text-right text-xs text-muted-foreground/70">{fmtDate(s.created_at)}</td>
+                    <td className="py-1.5 text-right">
+                      <div className="flex items-center justify-end gap-3">
+                        {s.ova_url && (
+                          <a href={s.ova_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400">
+                            {t('admin.snapDownload')}
+                          </a>
+                        )}
+                        {s.request_id && (
+                          <Link to={`/requests/${s.request_id}`} className="text-xs text-muted-foreground transition hover:text-foreground hover:underline">
+                            {t('admin.snapManage')}
+                          </Link>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

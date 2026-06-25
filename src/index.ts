@@ -35,6 +35,7 @@ import {
   countByUser,
   listActiveForCost,
   listCostData,
+  listAllSnapshots,
   setRequestStatus,
   createVm,
   setServerId,
@@ -535,9 +536,11 @@ app.post('/api/groups/:groupId/action', apiAuth, async (c) => {
         if (vm.expired_at) continue;
         await startInstance(c.env, vm.server_id);
         await updateVm(c.env, vm.id, 'pending');
+        await audit(c.env, user.email, 'vm.start', `req:${vm.id}`, `grp:${groupId}`);
       } else if (action === 'stop') {
         await stopInstance(c.env, vm.server_id);
         await updateVm(c.env, vm.id, 'stopping');
+        await audit(c.env, user.email, 'vm.stop', `req:${vm.id}`, `grp:${groupId}`);
       } else if (action === 'reboot') {
         await rebootInstance(c.env, vm.server_id);
       } else if (action === 'terminate') {
@@ -545,6 +548,7 @@ app.post('/api/groups/:groupId/action', apiAuth, async (c) => {
         if (vm.ssh_key_name) await deleteKeyPair(c.env, vm.ssh_key_name);
         await updateVm(c.env, vm.id, 'terminated');
         await setRequestStatus(c.env, vm.id, 'terminated');
+        await audit(c.env, user.email, 'vm.terminate', `req:${vm.id}`, vm.server_id ?? `grp:${groupId}`);
       }
       affected++;
     } catch {
@@ -889,6 +893,11 @@ app.get('/api/admin/metrics', apiAdmin, async (c) => {
 app.get('/api/admin/cost', apiAdmin, async (c) => {
   const { vms, events } = await listCostData(c.env);
   return c.json(computeCostReport(assembleVms(vms, events), Date.now()));
+});
+
+// Tous les snapshots (vue admin globale).
+app.get('/api/admin/snapshots', apiAdmin, async (c) => {
+  return c.json({ snapshots: await listAllSnapshots(c.env) });
 });
 
 app.get('/api/admin/users', apiAdmin, async (c) => {

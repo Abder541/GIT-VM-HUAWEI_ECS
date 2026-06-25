@@ -138,6 +138,11 @@ export interface Snapshot {
   completed_at: string | null;
 }
 
+export interface AdminSnapshot extends Snapshot {
+  user_email: string;
+  vm_name: string | null;
+}
+
 export interface VmRequest {
   id: number;
   user_email: string;

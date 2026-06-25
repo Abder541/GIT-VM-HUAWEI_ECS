@@ -3,6 +3,12 @@
 // Le compute n'est facturé que pendant les périodes d'allumage, reconstituées
 // depuis l'audit_log (events ON/OFF). Le stockage (disque) est facturé sur toute
 // la durée de vie (création → terminaison), qu'il tourne ou non.
+//
+// IMPORTANT — la FIN est autoritaire = statut + horodatages de la demande, PAS
+// seulement l'audit : une VM terminée via une action de groupe n'émet pas
+// d'événement par VM, donc on ne doit jamais facturer un interval « ouvert »
+// jusqu'à maintenant pour une VM non active.
+//
 // Module PUR (aucune I/O) → testable en isolation (cf. test/cost.test.ts).
 
 import { hourlyEurFor, storageHourlyEur, estimateMonthlyEur } from './presets';
@@ -19,6 +25,8 @@ const OFF_ACTIONS = new Set([
   'vm.drift.terminated',
 ]);
 const END_ACTIONS = new Set(['vm.terminate', 'vm.expired.terminated', 'vm.drift.terminated']);
+// Statuts terminaux : la VM n'existe plus (compute ET stockage arrêtés).
+const TERMINAL_STATUS = new Set(['terminated', 'expired', 'failed', 'rejected', 'deleted']);
 
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
@@ -36,6 +44,8 @@ export interface VmForCost {
   preset: string;
   storage: string | null;
   status: string;
+  endDate: number | null; // end_date planifiée (epoch ms) — borne max de vie
+  expiredAt: number | null; // expired_at (epoch ms) — fin réelle si expirée
   events: VmEvent[]; // triés croissant par `at`
 }
 
@@ -73,11 +83,12 @@ interface Lifecycle {
 }
 
 /**
- * Reconstitue, depuis les events triés, les intervalles d'allumage (compute) et
- * la durée de vie (stockage). Un interval ouvert (VM encore allumée / encore en vie)
- * est clôturé à `now`.
+ * Reconstitue les intervalles d'allumage (compute) et la durée de vie (stockage).
+ * La fin effective est bornée par le statut/horodatages : une VM non active n'est
+ * jamais facturée jusqu'à `now`.
  */
-export function reconstruct(events: VmEvent[], now: number): Lifecycle {
+export function reconstruct(vm: VmForCost, now: number): Lifecycle {
+  const { events, status } = vm;
   const running: [number, number][] = [];
   let onSince: number | null = null;
   let ended = false;
@@ -97,17 +108,32 @@ export function reconstruct(events: VmEvent[], now: number): Lifecycle {
       }
     }
   }
-  const currentlyOn = onSince !== null && !ended;
-  if (currentlyOn && onSince !== null) running.push([onSince, now]);
 
-  // Début de vie = premier allumage confirmé (vm.active) ; le stockage est facturé
-  // de là jusqu'à la terminaison (ou maintenant). Pas d'allumage → VM jamais
-  // provisionnée → exclue (life null).
+  // Fin autoritaire : événement de fin si présent ; sinon, si le statut est terminal,
+  // on borne au meilleur horodatage connu (expiry réel, sinon date de fin planifiée),
+  // sans jamais dépasser maintenant ; sinon la VM est encore en vie → maintenant.
+  const terminal = TERMINAL_STATUS.has(status);
+  let effectiveEnd: number;
+  if (ended && endAt !== null) effectiveEnd = endAt;
+  else if (terminal) effectiveEnd = Math.min(now, vm.expiredAt ?? vm.endDate ?? now);
+  else effectiveEnd = now;
+
+  // Clôture d'un éventuel interval ouvert (VM jamais éteinte par un event) à la fin effective.
+  if (onSince !== null && effectiveEnd > onSince) running.push([onSince, effectiveEnd]);
+
+  // Sécurité : aucune période ne dépasse la fin effective.
+  const clamped = running
+    .map(([a, b]) => [a, Math.min(b, effectiveEnd)] as [number, number])
+    .filter(([a, b]) => b > a);
+
   const firstOn = events.find((e) => ON_ACTIONS.has(e.action));
   const start = firstOn ? firstOn.at : null;
-  const lifeEnd = ended ? (endAt as number) : now;
-  const life: [number, number] | null = start !== null && lifeEnd > start ? [start, lifeEnd] : null;
-  return { running, life, currentlyOn };
+  const life: [number, number] | null =
+    start !== null && effectiveEnd > start ? [start, effectiveEnd] : null;
+
+  // « En marche maintenant » = statut actif ET aucun événement de fin vu.
+  const currentlyOn = status === 'active' && !ended;
+  return { running: clamped, life, currentlyOn };
 }
 
 const hoursOf = (intervals: [number, number][]) =>
@@ -128,7 +154,16 @@ function spreadPerDay(acc: Map<string, number>, start: number, end: number, rate
 
 /** Regroupe les events (déjà triés) par VM. */
 export function assembleVms(
-  rows: { id: number; user_email: string; name: string | null; preset: string; storage: string | null; status: string }[],
+  rows: {
+    id: number;
+    user_email: string;
+    name: string | null;
+    preset: string;
+    storage: string | null;
+    status: string;
+    endDate: number | null;
+    expiredAt: number | null;
+  }[],
   events: { req: number; action: string; at: number }[]
 ): VmForCost[] {
   const byReq = new Map<number, VmEvent[]>();
@@ -151,7 +186,7 @@ export function computeCostReport(vms: VmForCost[], now: number, days = 30): Cos
   let fleetMonthlyEur = 0;
 
   for (const vm of vms) {
-    const { running, life, currentlyOn } = reconstruct(vm.events, now);
+    const { running, life, currentlyOn } = reconstruct(vm, now);
     if (life === null) continue; // VM jamais réellement provisionnée
 
     const computeRate = hourlyEurFor(vm.preset);

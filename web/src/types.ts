@@ -63,6 +63,7 @@ export type Status =
   | 'active'
   | 'stopped'
   | 'failed'
+  | 'terminating'
   | 'terminated'
   | 'expired';
 

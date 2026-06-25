@@ -621,6 +621,24 @@ export async function listActiveVms(env: Env): Promise<ActiveVm[]> {
   return res.results ?? [];
 }
 
+// VMs en cours de suppression différée (snapshot-à-la-suppression) — finalisées par le réconciliateur.
+export async function listTerminating(env: Env): Promise<{ id: number; user_email: string; server_id: string | null; ssh_key_name: string | null }[]> {
+  const res = await env.DB.prepare(
+    `SELECT r.id, r.user_email, v.server_id, v.ssh_key_name
+       FROM vm_requests r JOIN vms v ON v.request_id = r.id
+      WHERE r.status = 'terminating'`
+  ).all<{ id: number; user_email: string; server_id: string | null; ssh_key_name: string | null }>();
+  return res.results ?? [];
+}
+
+// État + âge (ms) du dernier snapshot d'une demande (pour décider de finaliser la suppression).
+export async function latestSnapshotForRequest(env: Env, requestId: number): Promise<{ status: string; atMs: number } | null> {
+  const r = await env.DB.prepare(
+    `SELECT status, created_at FROM snapshots WHERE request_id = ?1 ORDER BY created_at DESC LIMIT 1`
+  ).bind(requestId).first<{ status: string; created_at: string }>();
+  return r ? { status: r.status, atMs: sqliteToMs(r.created_at) } : null;
+}
+
 export interface IdleVm { id: number; user_email: string; server_id: string | null; }
 export async function listRunningVmsForIdle(env: Env): Promise<IdleVm[]> {
   // L'idle-stop RESPECTE le planning : on exclut les VM à planning actif (schedule_enabled=1),

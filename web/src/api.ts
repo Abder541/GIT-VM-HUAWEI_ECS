@@ -30,19 +30,6 @@ export const api = {
   presets: () => req<PresetCatalog>('/api/presets'),
 
   listRequests: () => req<{ requests: VmRequest[] }>('/api/requests').then((r) => r.requests),
-  createRequest: (
-    perf: string,
-    storage: string,
-    os: string,
-    purpose: string,
-    startDate: string | null,
-    endDate: string,
-    course = ''
-  ) =>
-    req<{ id: number }>('/api/requests', {
-      method: 'POST',
-      body: JSON.stringify({ perf, storage, os, purpose, startDate, endDate, course }),
-    }),
   createBatch: (
     vms: { name: string; perf: string; storage: string; os: string; purpose: string; startDate: string | null; endDate: string; course: string; snapshotId?: number | null }[],
     group?: { name: string }

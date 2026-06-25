@@ -394,48 +394,8 @@ app.get('/api/requests', apiAuth, async (c) => {
   return c.json({ requests: rows });
 });
 
-app.post('/api/requests', apiAuth, async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json().catch(() => ({}));
-  const perf = String(body.perf ?? '');
-  const storage = String(body.storage ?? '');
-  const os = String(body.os ?? '');
-  const purpose = String(body.purpose ?? '').trim();
-  const course = String(body.course ?? '');
-  if (!isValidPerf(perf) || !isValidStorage(storage) || !isValidOs(os) || !isValidCourse(course) || !purpose) {
-    return c.json({ error: 'invalid_request' }, 400);
-  }
-  // Some OS need a minimum root disk (Windows ≥ 30 Go).
-  const osDef = OS[os];
-  const storageDef = STORAGE[storage];
-  if (osDef.minStorageGb && storageDef.sizeGb < osDef.minStorageGb) {
-    return c.json({ error: 'storage_too_small' }, 400);
-  }
-  // Lifecycle dates: end date is MANDATORY ("aucune machine sans date de fin").
-  const now = Date.now();
-  const end = body.endDate ? new Date(String(body.endDate)) : null;
-  const start = body.startDate ? new Date(String(body.startDate)) : null;
-  if (!end || isNaN(end.getTime()) || end.getTime() <= now) {
-    return c.json({ error: 'invalid_end_date' }, 400);
-  }
-  if (start && (isNaN(start.getTime()) || start.getTime() >= end.getTime())) {
-    return c.json({ error: 'invalid_start_date' }, 400);
-  }
-  // Rate limit: max 5 requests per hour per user.
-  if ((await countRecentRequests(c.env, user.email, 60)) >= 5) {
-    return c.json({ error: 'rate_limited' }, 429, { 'Retry-After': '3600' });
-  }
-  const id = await createRequest(
-    c.env, user.email, purpose, perf, storage, os, c.env.HUAWEI_REGION,
-    start ? start.toISOString() : null, end.toISOString(), course || null
-  );
-  await audit(c.env, user.email, 'request.create', `req:${id}`, `${perf}/${storage}/${os}${course ? `/${course}` : ''} end:${end.toISOString()}`);
-  await notifyAdminsInApp(c.env, 'request_new', `/requests/${id}`);
-  c.executionCtx.waitUntil(notifyAdminsNewRequest(c.env, id, user.email, PERF[perf].label));
-  return c.json({ id }, 201);
-});
-
 // Batch creation: 1–4 individually-configured VMs, optionally in a named group.
+// Voie UNIQUE de création (le SPA passe toujours par batch, même pour 1 VM).
 app.post('/api/requests/batch', apiAuth, async (c) => {
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));

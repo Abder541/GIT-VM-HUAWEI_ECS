@@ -418,6 +418,44 @@ export async function listActiveForCost(env: Env): Promise<{ preset: string; sto
   return res.results ?? [];
 }
 
+// Actions d'audit ON/OFF utilisées pour reconstituer les heures réelles (cf. src/cost.ts).
+const COST_EVENT_ACTIONS = [
+  'vm.active', 'vm.schedule.start', 'vm.start',
+  'vm.stop', 'vm.schedule.stop', 'vm.scheduled_stop', 'vm.idle_stop',
+  'vm.terminate', 'vm.expired.terminated', 'vm.drift.terminated',
+];
+
+// SQLite CURRENT_TIMESTAMP = 'YYYY-MM-DD HH:MM:SS' en UTC → epoch ms.
+function sqliteToMs(s: string): number {
+  const iso = s.includes('T') ? s : s.replace(' ', 'T');
+  return Date.parse(iso.endsWith('Z') ? iso : iso + 'Z');
+}
+
+// VMs (métadonnées) + events d'allumage (target `req:<id>`), pour le rapport de coût.
+export async function listCostData(env: Env): Promise<{
+  vms: { id: number; user_email: string; name: string | null; preset: string; storage: string | null; status: string }[];
+  events: { req: number; action: string; at: number }[];
+}> {
+  const vmsRes = await env.DB.prepare(
+    `SELECT id, user_email, name, preset, storage, status FROM vm_requests`
+  ).all<{ id: number; user_email: string; name: string | null; preset: string; storage: string | null; status: string }>();
+
+  const ph = COST_EVENT_ACTIONS.map((_, i) => `?${i + 1}`).join(',');
+  const evRes = await env.DB.prepare(
+    `SELECT target, action, created_at FROM audit_log
+      WHERE action IN (${ph}) AND target LIKE 'req:%'
+      ORDER BY created_at ASC`
+  )
+    .bind(...COST_EVENT_ACTIONS)
+    .all<{ target: string; action: string; created_at: string }>();
+
+  const events = (evRes.results ?? [])
+    .map((e) => ({ req: Number(e.target.slice(4)), action: e.action, at: sqliteToMs(e.created_at) }))
+    .filter((e) => Number.isFinite(e.req) && Number.isFinite(e.at));
+
+  return { vms: vmsRes.results ?? [], events };
+}
+
 export async function countByStatus(env: Env): Promise<Record<string, number>> {
   const res = await env.DB.prepare(
     `SELECT CASE WHEN expired_at IS NOT NULL THEN 'expired' ELSE status END AS status,

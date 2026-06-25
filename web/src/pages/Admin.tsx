@@ -9,7 +9,7 @@ import { fmtDate } from '../lib/format';
 import { UsersPanel } from '../components/UsersPanel';
 import { VmConsole } from '../components/VmConsole';
 
-type Tab = 'overview' | 'vms' | 'users' | 'monitoring';
+type Tab = 'overview' | 'vms' | 'users' | 'cost' | 'monitoring';
 
 /* ---------- shared bits ---------- */
 function StatCard({ label, value, dot }: { label: string; value: number; dot: string }) {
@@ -50,6 +50,7 @@ const ICONS: Record<Tab, string> = {
   overview: 'M4 13h6V4H4zM14 20h6v-9h-6zM14 4v4h6V4zM4 20h6v-4H4z',
   vms: 'M5 4h14a2 2 0 0 1 2 2v3H3V6a2 2 0 0 1 2-2zM3 15h18v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM7 7h.01M7 18h.01',
   users: 'M16 21v-2a4 4 0 0 0-8 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  cost: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
   monitoring: 'M22 12h-4l-3 9L9 3l-3 9H2',
 };
 
@@ -75,6 +76,7 @@ export function Admin() {
     { id: 'overview', label: t('admin.navOverview') },
     { id: 'vms', label: t('admin.navVms'), badge: pending },
     { id: 'users', label: t('admin.navUsers') },
+    { id: 'cost', label: t('admin.navCost') },
     { id: 'monitoring', label: t('admin.navMonitoring') },
   ];
 
@@ -113,6 +115,7 @@ export function Admin() {
           {tab === 'overview' && <OverviewSection stats={stats} metrics={metricsQ.data} />}
           {tab === 'vms' && <VmConsole rows={rows} loading={allQ.isLoading} catalog={catalog} />}
           {tab === 'users' && <UsersSection rows={rows} />}
+          {tab === 'cost' && <CostSection />}
           {tab === 'monitoring' && <MonitoringSection grafanaUrl={catalog?.grafanaUrl} />}
         </div>
       </div>
@@ -201,6 +204,106 @@ function AuditList({ entries, compact }: { entries: AuditEntry[]; compact?: bool
           <span className="ml-auto shrink-0 text-xs text-muted-foreground/70">{fmtDate(e.created_at)}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ---------- Coûts (heures réelles) ---------- */
+const fmtEur = (n: number) => `${n.toFixed(2)} €`;
+
+function CostSection() {
+  const { t } = useTranslation();
+  const costQ = useQuery({ queryKey: ['admin-cost'], queryFn: api.adminCost, refetchInterval: 30000 });
+  const d = costQ.data;
+  if (!d) return <p className="py-10 text-center text-sm text-muted-foreground">…</p>;
+  const maxDay = Math.max(1, ...d.perDay.map((x) => x.eur));
+  return (
+    <div className="space-y-6">
+      <SectionTitle title={t('admin.navCost')} hint={t('admin.costPageHint')} />
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MetricCard label={t('admin.costTotal')} value={fmtEur(d.totalEur)} />
+        <MetricCard label={t('admin.costCompute')} value={fmtEur(d.computeEur)} />
+        <MetricCard label={t('admin.costStorage')} value={fmtEur(d.storageEur)} />
+        <MetricCard label={t('admin.costFleetMonthly')} value={fmtEur(d.fleetMonthlyEur)} />
+      </div>
+
+      {d.perDay.length > 0 && (
+        <Card className="p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerDay')}</h3>
+          <div className="flex h-40 items-end gap-1">
+            {d.perDay.map((x) => (
+              <div
+                key={x.date}
+                className="group flex flex-1 flex-col items-center justify-end"
+                title={`${x.date} · ${fmtEur(x.eur)}`}
+              >
+                <div
+                  className="w-full rounded-t bg-emerald-500/70 transition group-hover:bg-emerald-500"
+                  style={{ height: `${Math.max(2, (x.eur / maxDay) * 100)}%` }}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
+            <span>{d.perDay[0]?.date}</span>
+            <span>{d.perDay[d.perDay.length - 1]?.date}</span>
+          </div>
+        </Card>
+      )}
+
+      <Card className="p-5">
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerUser')}</h3>
+        {d.perUser.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">{t('admin.noCost')}</p>
+        ) : (
+          <div className="space-y-2">
+            {d.perUser.map((u) => (
+              <div key={u.email} className="flex items-center gap-3 text-sm">
+                <span className="truncate text-muted-foreground">{u.email}</span>
+                <span className="shrink-0 text-xs text-muted-foreground/70">{u.vms} VM</span>
+                <span className="ml-auto shrink-0 font-semibold tabular-nums">{fmtEur(u.eur)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-5">
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('admin.costPerVm')}</h3>
+        {d.perVm.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">{t('admin.noCost')}</p>
+        ) : (
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="pb-2 font-medium">{t('admin.costVm')}</th>
+                  <th className="pb-2 font-medium">{t('admin.costUser')}</th>
+                  <th className="pb-2 text-right font-medium">{t('admin.costHours')}</th>
+                  <th className="pb-2 text-right font-medium">€</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.perVm.map((v) => (
+                  <tr key={v.id} className="border-t border-border/60">
+                    <td className="py-1.5">
+                      <span className="font-medium">{v.name || `#${v.id}`}</span>
+                      <span className="ml-1.5 font-mono text-xs text-muted-foreground">{v.preset}</span>
+                      {v.running && <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 align-middle" title="active" />}
+                    </td>
+                    <td className="truncate py-1.5 text-muted-foreground">{v.user}</td>
+                    <td className="py-1.5 text-right tabular-nums text-muted-foreground">{v.runningHours.toFixed(1)}</td>
+                    <td className="py-1.5 text-right font-semibold tabular-nums">{fmtEur(v.eur)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <p className="text-xs text-muted-foreground">{t('admin.costDisclaimer')}</p>
     </div>
   );
 }

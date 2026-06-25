@@ -256,3 +256,14 @@ export function estimateMonthlyEur(perfId: string, storageId: string): number {
   if (!p || !s) return 0;
   return p.hourlyEur * HOURS_PER_MONTH + s.sizeGb * STORAGE_EUR_GB_MONTH;
 }
+
+// Tarif horaire compute d'un flavor (€/h) ; 0 si inconnu. Utilisé par le calcul de coût réel.
+export function hourlyEurFor(perfId: string): number {
+  return PERF[perfId]?.hourlyEur ?? 0;
+}
+
+// Tarif horaire du stockage (€/h) — le disque est facturé qu'il tourne ou non.
+export function storageHourlyEur(storageId: string | null): number {
+  const s = storageId ? STORAGE[storageId] : undefined;
+  return s ? (s.sizeGb * STORAGE_EUR_GB_MONTH) / HOURS_PER_MONTH : 0;
+}

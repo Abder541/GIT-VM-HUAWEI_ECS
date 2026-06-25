@@ -25,6 +25,8 @@
 
   // Config non secrète. Secrets (HUAWEI_ACCESS_KEY/SECRET_KEY, ENTRA_CLIENT_SECRET,
   // SESSION_SECRET, DATA_ENCRYPTION_KEY, EMAILJS_PRIVATE_KEY) via `wrangler secret put`.
+  // SENTRY_DSN : aussi via `wrangler secret put` (repo public ⇒ DSN pas commité en clair,
+  // sinon un tiers pourrait spammer le quota d'ingestion). Le code lit c.env.SENTRY_DSN (no-op si vide).
   "vars": {
     "ALLOWED_EMAIL_DOMAINS": "satom.ch,git.swiss",
     "ADMIN_EMAILS": "abderahmane.chaouche@satom.ch",
@@ -46,7 +48,6 @@
     "IDLE_STOP": "true",
     "IDLE_STOP_HOURS": "3",
     "HARDENING": "true",
-    "SENTRY_DSN": "",
     "EMAILJS_PUBLIC_KEY": "KIKcUV9eCQouP22hT",
     "EMAILJS_SERVICE_ID": "",
     "EMAILJS_TEMPLATE_ID": ""

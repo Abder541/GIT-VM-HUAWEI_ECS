@@ -41,14 +41,6 @@ export async function setUserRole(env: Env, email: string, role: 'member' | 'for
   await env.DB.prepare(`UPDATE users SET role = ?2 WHERE email = ?1`).bind(email, role).run();
 }
 
-export async function addComment(env: Env, requestId: number, author: string, body: string) {
-  await env.DB.prepare(
-    `INSERT INTO request_comments (request_id, author, body) VALUES (?1, ?2, ?3)`
-  )
-    .bind(requestId, author, body)
-    .run();
-}
-
 // ---- Notifications in-app -----------------------------------------------
 export async function addNotification(env: Env, userEmail: string, type: string, link: string | null = null) {
   await env.DB.prepare(`INSERT INTO notifications (user_email, type, link) VALUES (?1, ?2, ?3)`)
@@ -80,15 +72,6 @@ export async function countUnreadNotifications(env: Env, userEmail: string): Pro
 
 export async function markNotificationsRead(env: Env, userEmail: string) {
   await env.DB.prepare(`UPDATE notifications SET read = 1 WHERE user_email = ?1 AND read = 0`).bind(userEmail).run();
-}
-
-export async function listComments(env: Env, requestId: number) {
-  const res = await env.DB.prepare(
-    `SELECT id, author, body, created_at FROM request_comments WHERE request_id = ?1 ORDER BY created_at`
-  )
-    .bind(requestId)
-    .all();
-  return res.results ?? [];
 }
 
 export async function metrics(env: Env) {

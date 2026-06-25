@@ -76,8 +76,6 @@ import {
   deleteSnapshotRowsForRequest,
   listUsers,
   setUserRole,
-  addComment,
-  listComments,
   setCourseReady,
   addNotification,
   notifyAdminsInApp,
@@ -909,30 +907,6 @@ app.post('/api/internal/course-done', async (c) => {
   return c.json({ ok: true });
 });
 
-// ---- Comments (owner + admins) -----------------------------------------
-app.get('/api/requests/:id/comments', apiAuth, async (c) => {
-  const user = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  if (r.user_email !== user.email && user.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
-  return c.json({ comments: await listComments(c.env, id) });
-});
-
-app.post('/api/requests/:id/comments', apiAuth, async (c) => {
-  const user = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  if (r.user_email !== user.email && user.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
-  const body = await c.req.json().catch(() => ({}));
-  const text = String(body.body ?? '').trim().slice(0, 2000);
-  if (!text) return c.json({ error: 'empty' }, 400);
-  await addComment(c.env, id, user.email, text);
-  await audit(c.env, user.email, 'comment.add', `req:${id}`);
-  return c.json({ ok: true }, 201);
-});
-
 // ---- Admin API ----------------------------------------------------------
 app.get('/api/admin/requests', apiAdmin, async (c) => {
   const status = c.req.query('status');
@@ -1163,21 +1137,6 @@ app.get('/api/monitoring/:metric', async (c) => {
     return c.json([{ activeVms: rows.length, monthlyEur: Math.round(monthlyEur * 100) / 100 }]);
   }
   return c.json({ error: 'unknown_metric' }, 404);
-});
-
-// Admin proposes a change to the request: posts a message (comment) + notifies the user.
-app.post('/api/admin/requests/:id/suggest', apiAdmin, async (c) => {
-  const admin = c.get('user');
-  const id = Number(c.req.param('id'));
-  const r = await getRequest(c.env, id);
-  if (!r) return c.json({ error: 'not_found' }, 404);
-  const body = await c.req.json().catch(() => ({}));
-  const note = String(body.note ?? '').trim().slice(0, 2000);
-  if (!note) return c.json({ error: 'empty' }, 400);
-  await addComment(c.env, id, admin.email, `[Proposition de modification] ${note}`);
-  await addNotification(c.env, r.user_email, 'suggestion', `/requests/${id}`);
-  await audit(c.env, admin.email, 'request.suggest', `req:${id}`);
-  return c.json({ ok: true });
 });
 
 // ---- Static assets (React SPA) -----------------------------------------

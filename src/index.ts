@@ -60,6 +60,8 @@ import {
   listExpired,
   listExpiringSoon,
   markExpired,
+  listTerminating,
+  latestSnapshotForRequest,
   requestExtension,
   approveExtension,
   rejectExtension,
@@ -606,7 +608,15 @@ app.post('/api/requests/:id/terminate', apiAuth, async (c) => {
 
   const vm: any = await getVmByRequest(c.env, id);
   try {
-    if (r.snapshot_on_delete && vm?.server_id) await autoSnapshot(c.env, id, r.user_email, vm.server_id);
+    // Snapshot-à-la-suppression : on DIFFÈRE la destruction Huawei. Sinon le disque source
+    // est supprimé avant la fin du snapshot → snapshot bloqué « pending » à vie. On crée le
+    // snapshot, on passe en 'terminating', et le réconciliateur finalise une fois le snapshot prêt.
+    if (r.snapshot_on_delete && vm?.server_id) {
+      await autoSnapshot(c.env, id, r.user_email, vm.server_id);
+      await setRequestStatus(c.env, id, 'terminating');
+      await audit(c.env, user.email, 'vm.terminate.deferred', `req:${id}`, vm.server_id);
+      return c.json({ ok: true, deferred: true });
+    }
     if (vm?.server_id) await terminateInstance(c.env, vm.server_id);
     if (vm?.ssh_key_name) await deleteKeyPair(c.env, vm.ssh_key_name);
     if (vm) await updateVm(c.env, id, 'terminated');
@@ -1405,7 +1415,16 @@ async function retryFailed(env: Env): Promise<void> {
 async function enforceExpiry(env: Env): Promise<void> {
   for (const row of await listExpired(env)) {
     try {
-      if (row.snapshot_on_delete && row.server_id) await autoSnapshot(env, row.id, row.user_email, row.server_id);
+      // Snapshot-à-la-suppression : destruction Huawei différée (cf. terminate manuel).
+      if (row.snapshot_on_delete && row.server_id) {
+        await autoSnapshot(env, row.id, row.user_email, row.server_id);
+        await markExpired(env, row.id);
+        await setRequestStatus(env, row.id, 'terminating');
+        await audit(env, 'system', 'vm.expired.deferred', `req:${row.id}`, row.server_id);
+        await addNotification(env, row.user_email, 'expired', `/requests/${row.id}`);
+        await notifyUserExpired(env, row.user_email, row.id);
+        continue;
+      }
       if (row.server_id) await terminateInstance(env, row.server_id);
       if (row.ssh_key_name) await deleteKeyPair(env, row.ssh_key_name);
       await updateVm(env, row.id, 'terminated');
@@ -1444,6 +1463,28 @@ async function syncSnapshots(env: Env): Promise<void> {
   }
 }
 
+// Finalise les suppressions DIFFÉRÉES (snapshot-à-la-suppression) : une fois le snapshot
+// terminé — ou après un timeout de garde — on détruit réellement la VM + le disque. Sépare
+// la création du snapshot de la suppression du disque (sinon le snapshot reste « pending »).
+const DEFERRED_DELETE_TIMEOUT_MS = 20 * 60 * 1000;
+async function finalizePendingDeletions(env: Env): Promise<void> {
+  for (const row of await listTerminating(env)) {
+    try {
+      const snap = await latestSnapshotForRequest(env, row.id);
+      const settled = !snap || snap.status === 'completed' || snap.status === 'error';
+      const timedOut = snap ? Date.now() - snap.atMs > DEFERRED_DELETE_TIMEOUT_MS : true;
+      if (!settled && !timedOut) continue; // snapshot encore en cours → on attend le prochain tick
+      if (row.server_id) await terminateInstance(env, row.server_id);
+      if (row.ssh_key_name) await deleteKeyPair(env, row.ssh_key_name);
+      await updateVm(env, row.id, 'terminated');
+      await setRequestStatus(env, row.id, 'terminated');
+      await audit(env, 'system', 'vm.terminate', `req:${row.id}`, `${row.server_id ?? ''} snap=${snap?.status ?? 'none'}${!settled && timedOut ? ' timeout' : ''}`);
+    } catch (e: any) {
+      await audit(env, 'system', 'vm.terminate.deferred.error', `req:${row.id}`, e.message);
+    }
+  }
+}
+
 app.onError((err, c) => {
   reportError(c.env.SENTRY_DSN, err, c.executionCtx, { path: c.req.path });
   return c.json({ error: 'internal' }, 500);
@@ -1460,6 +1501,7 @@ export default {
         await enforceExpiry(env);
         await enforceIdleStop(env);
         await syncSnapshots(env);
+        await finalizePendingDeletions(env);
         // Garde-fou nocturne fusionné dans l'unique cron (limite Cloudflare de 5 crons/compte) :
         // déclenché une fois au passage de 19:00 UTC.
         const now = new Date();

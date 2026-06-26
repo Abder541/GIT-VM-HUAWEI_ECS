@@ -431,7 +431,9 @@ app.post('/api/requests/batch', apiAuth, async (c) => {
     const restoreSnapshotId = v.snapshotId && Number.isInteger(Number(v.snapshotId)) ? Number(v.snapshotId) : null;
     parsed.push({ name, perf, storage, os, purpose, course, start: start ? start.toISOString() : null, end: end.toISOString(), restoreSnapshotId });
   }
-  if ((await countRecentRequests(c.env, user.email, 60)) + parsed.length > 10) {
+  // Limite anti-abus : 10 VM/h par utilisateur. Les admins (gestion/tests de la plateforme)
+  // en sont exemptés.
+  if (user.role !== 'admin' && (await countRecentRequests(c.env, user.email, 60)) + parsed.length > 10) {
     return c.json({ error: 'rate_limited' }, 429, { 'Retry-After': '3600' });
   }
   // Multi-VM batches are always grouped (fallback name if the client omitted one).

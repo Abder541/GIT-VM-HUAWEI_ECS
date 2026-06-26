@@ -37,6 +37,7 @@ import {
   listCostData,
   listAllSnapshots,
   getAnySnapshot,
+  createBackupRow,
   setRequestStatus,
   createVm,
   setServerId,
@@ -97,7 +98,7 @@ import { huawei } from './huawei';
 // Huawei, pour que les sites d'appel des routes restent inchangés. createKeyPair /
 // launchInstance / listManaged sont utilisés directement (provisionRequest / reconcile).
 const describeInstance = (env: Env, serverId: string) => huawei(env).describeInstance(serverId);
-const terminateInstance = (env: Env, serverId: string) => huawei(env).terminateInstance(serverId);
+const terminateInstance = (env: Env, serverId: string, keepVolume?: boolean) => huawei(env).terminateInstance(serverId, keepVolume);
 const deleteKeyPair = (env: Env, keyName: string) => huawei(env).deleteKeyPair(keyName);
 const startInstance = (env: Env, serverId: string) => huawei(env).startInstance(serverId);
 const stopInstance = (env: Env, serverId: string) => huawei(env).stopInstance(serverId);
@@ -112,6 +113,7 @@ const RESTORE_ENABLED = false;
 const createSnapshot = (env: Env, volumeId: string, description: string) => huawei(env).createSnapshot(volumeId, description);
 const describeSnapshot = (env: Env, snapshotId: string) => huawei(env).describeSnapshot(snapshotId);
 const deleteSnapshot = (env: Env, snapshotId: string) => huawei(env).deleteSnapshot(snapshotId);
+const deleteVolume = (env: Env, volumeId: string) => huawei(env).deleteVolume(volumeId);
 const maxCpuOverWindow = (env: Env, serverId: string, minutes: number) => huawei(env).maxCpuOverWindow(serverId, minutes);
 
 // Clé de chiffrement au repos (clés SSH / mots de passe) — séparée de SESSION_SECRET.
@@ -306,22 +308,27 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     userData,
     nameTag: req.name ? `${req.name}.${req.user_email.split('@')[0]}` : null,
   });
+  if (!jobId) throw new Error('ECS launch: job_id manquant');
   await createVm(env, req.id, jobId, kp.keyName, encKey, os.sshUser, os.connect, encPassword);
   return jobId;
 }
 
-// Take an EVS snapshot of a VM's root volume (best-effort; used by auto-on-delete).
-async function autoSnapshot(env: Env, requestId: number, owner: string, instanceId: string): Promise<void> {
+// Sauvegarde à la suppression (Option A) : conserve le DISQUE racine (un snapshot EVS mourrait
+// avec le disque). Détruit le serveur en GARDANT le volume, puis l'enregistre comme sauvegarde
+// restaurable. Retourne true si la sauvegarde est faite (serveur déjà détruit), false sinon
+// (pas de volume identifiable → l'appelant fait une suppression normale).
+async function keepVolumeBackup(env: Env, requestId: number, owner: string, serverId: string): Promise<boolean> {
   try {
-    const rv = await describeRootVolume(env, instanceId);
-    if (!rv.volumeId) return;
+    const rv = await describeRootVolume(env, serverId);
+    if (!rv.volumeId) return false;
+    await terminateInstance(env, serverId, true); // détruit le serveur, CONSERVE le disque
     const r = await getRequest(env, requestId);
-    const desc = `auto req-${requestId} ${new Date().toISOString().slice(0, 16)}`;
-    const snapId = await createSnapshot(env, rv.volumeId, desc);
-    await createSnapshotRow(env, requestId, owner, snapId, desc, rv.rootDevice ?? null, rv.architecture ?? null, r?.os ?? null);
-    await audit(env, 'system', 'snapshot.auto', `req:${requestId}`, snapId);
+    await createBackupRow(env, requestId, owner, rv.volumeId, rv.sizeGb ?? null, r?.os ?? null, `backup req-${requestId} ${new Date().toISOString().slice(0, 16)}`);
+    await audit(env, 'system', 'vm.backup.kept', `req:${requestId}`, rv.volumeId);
+    return true;
   } catch (e: any) {
-    await audit(env, 'system', 'snapshot.auto.error', `req:${requestId}`, e.message);
+    await audit(env, 'system', 'vm.backup.error', `req:${requestId}`, e.message);
+    return false;
   }
 }
 
@@ -611,11 +618,17 @@ app.post('/api/requests/:id/terminate', apiAuth, async (c) => {
     // Snapshot-à-la-suppression : on DIFFÈRE la destruction Huawei. Sinon le disque source
     // est supprimé avant la fin du snapshot → snapshot bloqué « pending » à vie. On crée le
     // snapshot, on passe en 'terminating', et le réconciliateur finalise une fois le snapshot prêt.
+    // Sauvegarde à la suppression = on GARDE le disque (Option A), restaurable ensuite.
     if (r.snapshot_on_delete && vm?.server_id) {
-      await autoSnapshot(c.env, id, r.user_email, vm.server_id);
-      await setRequestStatus(c.env, id, 'terminating');
-      await audit(c.env, user.email, 'vm.terminate.deferred', `req:${id}`, vm.server_id);
-      return c.json({ ok: true, deferred: true });
+      const kept = await keepVolumeBackup(c.env, id, r.user_email, vm.server_id);
+      if (kept) {
+        if (vm?.ssh_key_name) await deleteKeyPair(c.env, vm.ssh_key_name);
+        await updateVm(c.env, id, 'terminated');
+        await setRequestStatus(c.env, id, 'terminated');
+        await audit(c.env, user.email, 'vm.terminate', `req:${id}`, `${vm.server_id} +backup`);
+        return c.json({ ok: true });
+      }
+      // pas de volume identifiable → suppression normale ci-dessous
     }
     if (vm?.server_id) await terminateInstance(c.env, vm.server_id);
     if (vm?.ssh_key_name) await deleteKeyPair(c.env, vm.ssh_key_name);
@@ -916,9 +929,10 @@ app.delete('/api/admin/snapshots/:sid', apiAdmin, async (c) => {
   const sid = Number(c.req.param('sid'));
   const snap = await getAnySnapshot(c.env, sid);
   if (!snap) return c.json({ error: 'not_found' }, 404);
-  if (snap.snapshot_id) await deleteSnapshot(c.env, snap.snapshot_id).catch(() => {});
+  if (snap.backup_volume_id) await deleteVolume(c.env, snap.backup_volume_id).catch(() => {});
+  else if (snap.snapshot_id) await deleteSnapshot(c.env, snap.snapshot_id).catch(() => {});
   await deleteSnapshotRow(c.env, sid);
-  await audit(c.env, c.get('user').email, 'snapshot.delete', `snap:${sid}`, snap.snapshot_id ?? '');
+  await audit(c.env, c.get('user').email, 'snapshot.delete', `snap:${sid}`, snap.backup_volume_id ?? snap.snapshot_id ?? '');
   return c.json({ ok: true });
 });
 
@@ -1195,7 +1209,7 @@ async function reconcile(env: Env): Promise<void> {
           volumetype: storage.volumetype,
           nameTag: r.name ? `${r.name}.${r.user_email.split('@')[0]}` : null,
         });
-        await restoreToLaunch(env, row.id, imageId, h.jobId);
+        await restoreToLaunch(env, row.id, imageId, h.jobId ?? '');
         await audit(env, 'system', 'restore.image.ready', `req:${row.id}`, imageId);
         continue;
       }
@@ -1415,12 +1429,15 @@ async function retryFailed(env: Env): Promise<void> {
 async function enforceExpiry(env: Env): Promise<void> {
   for (const row of await listExpired(env)) {
     try {
-      // Snapshot-à-la-suppression : destruction Huawei différée (cf. terminate manuel).
+      // Sauvegarde à la suppression = on GARDE le disque (Option A), restaurable ensuite.
       if (row.snapshot_on_delete && row.server_id) {
-        await autoSnapshot(env, row.id, row.user_email, row.server_id);
+        const kept = await keepVolumeBackup(env, row.id, row.user_email, row.server_id);
+        if (!kept) await terminateInstance(env, row.server_id); // pas de volume → suppression normale
+        if (row.ssh_key_name) await deleteKeyPair(env, row.ssh_key_name);
+        await updateVm(env, row.id, 'terminated');
         await markExpired(env, row.id);
-        await setRequestStatus(env, row.id, 'terminating');
-        await audit(env, 'system', 'vm.expired.deferred', `req:${row.id}`, row.server_id);
+        await setRequestStatus(env, row.id, 'terminated');
+        await audit(env, 'system', 'vm.expired.terminated', `req:${row.id}`, kept ? `${row.server_id} +backup` : (row.server_id ?? ''));
         await addNotification(env, row.user_email, 'expired', `/requests/${row.id}`);
         await notifyUserExpired(env, row.user_email, row.id);
         continue;

@@ -246,7 +246,11 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
 
   const c = huawei(env);
   const isWindows = os.connect === 'rdp';
-  const isRestore = RESTORE_ENABLED && !!req.restore_snapshot_id;
+  // Restauration depuis une SAUVEGARDE (disque conservé, Option A) : repérée par backup_volume_id.
+  // Indépendante du gate legacy RESTORE_ENABLED (qui ne concerne que le restore IMS gated).
+  const restoreBackup = req.restore_snapshot_id ? await getAnySnapshot(env, req.restore_snapshot_id) : null;
+  const isBackupRestore = !!restoreBackup?.backup_volume_id;
+  const isRestore = RESTORE_ENABLED && !!req.restore_snapshot_id && !isBackupRestore;
   const hardeningOn = env.HARDENING !== 'false';
   let userData: string | undefined;
   let encPassword: string | null = null;
@@ -276,6 +280,27 @@ async function provisionRequest(env: Env, req: any): Promise<string> {
     } else if (hard) {
       userData = `#!/bin/bash\nset +e\n${hard}\n`;
     }
+  }
+
+  // Restauration depuis une SAUVEGARDE (Option A) : booter une nouvelle VM sur le DISQUE conservé
+  // (Nova boot-from-volume). Réutilise la clé SSH d'origine — le disque a déjà authorized_keys et
+  // la clé privée chiffrée est encore en base sur la VM source. L'EIP est attachée ensuite par le
+  // réconciliateur (restore_step='eip'). Synchrone → server_id connu tout de suite.
+  if (isBackupRestore && restoreBackup) {
+    const src: any = restoreBackup.request_id ? await getVmByRequest(env, restoreBackup.request_id) : null;
+    const handle = await c.launchInstance({
+      requestId: req.id,
+      keyName: src?.ssh_key_name ?? '',
+      flavor: perf.flavor,
+      imageId: '',
+      sizeGb: storage.sizeGb,
+      bootVolumeId: restoreBackup.backup_volume_id!,
+      nameTag: req.name ? `${req.name}.${req.user_email.split('@')[0]}` : null,
+    });
+    await createVm(env, req.id, '', src?.ssh_key_name ?? '', src?.ssh_private_key ?? '', src?.ssh_user ?? os.sshUser, src?.connect_method ?? os.connect, src?.admin_password ?? null, 'eip');
+    if (handle.serverId) await setServerId(env, req.id, handle.serverId);
+    await audit(env, 'system', 'vm.restore.booted', `req:${req.id}`, handle.serverId ?? '');
+    return handle.serverId ?? '';
   }
 
   // Restauration : flux ASYNC (volume → image → launch) piloté par le réconciliateur.
@@ -938,6 +963,34 @@ app.delete('/api/admin/snapshots/:sid', apiAdmin, async (c) => {
   return c.json({ ok: true });
 });
 
+// Restaurer une VM depuis une SAUVEGARDE (disque conservé) : crée une nouvelle demande basée
+// sur l'originale, bootée sur le disque de sauvegarde (single-use : le disque devient la VM).
+app.post('/api/admin/snapshots/:sid/restore', apiAdmin, async (c) => {
+  const sid = Number(c.req.param('sid'));
+  const backup = await getAnySnapshot(c.env, sid);
+  if (!backup?.backup_volume_id) return c.json({ error: 'not_a_backup' }, 400);
+  const orig = backup.request_id ? await getRequest(c.env, backup.request_id) : null;
+  if (!orig) return c.json({ error: 'origin_not_found' }, 404);
+  const end = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+  const newId = await createRequest(
+    c.env, orig.user_email, `Restauration de ${orig.name ?? `#${orig.id}`}`,
+    orig.preset, orig.storage ?? '', orig.os ?? '', orig.region, null, end,
+    orig.course ?? null, null, null, sid, orig.name ? `${orig.name}-restored` : null
+  );
+  await setRequestStatus(c.env, newId, 'provisioning', c.get('user').email);
+  const newReq = await getRequest(c.env, newId);
+  try {
+    await provisionRequest(c.env, newReq);
+    await deleteSnapshotRow(c.env, sid); // sauvegarde consommée : le disque devient la VM restaurée
+    await audit(c.env, c.get('user').email, 'vm.restore', `req:${newId}`, `from snap:${sid}`);
+    return c.json({ ok: true, id: newId });
+  } catch (e: any) {
+    await setRequestStatus(c.env, newId, 'failed', undefined, e.message);
+    await audit(c.env, c.get('user').email, 'vm.restore.failed', `req:${newId}`, e.message);
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 app.get('/api/admin/users', apiAdmin, async (c) => {
   return c.json({ users: await listUsers(c.env) });
 });
@@ -1276,6 +1329,13 @@ async function reconcile(env: Env): Promise<void> {
       // provisioning -> active dès que running + IP publique
       if (row.status === 'provisioning') {
         const s = await describeInstance(env, serverId);
+        // VM restaurée (boot-from-volume) : Nova ne pose pas d'EIP → on l'attache dès que running.
+        if (row.restore_step === 'eip' && s.state === 'running' && !s.publicIp) {
+          await c.attachEip(serverId);
+          await clearRestore(env, row.id);
+          await audit(env, 'system', 'vm.restore.eip', `req:${row.id}`, serverId);
+          continue; // l'IP sera visible au prochain tick → active
+        }
         if (s.state === 'running' && s.publicIp) {
           await updateVm(env, row.id, 'running', s.publicIp);
           await setRequestStatus(env, row.id, 'active');

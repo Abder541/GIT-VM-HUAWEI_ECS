@@ -335,6 +335,10 @@ function SnapshotsSection() {
     mutationFn: (sid: number) => api.adminDeleteSnapshot(sid),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-snapshots'] }),
   });
+  const restore = useMutation({
+    mutationFn: (sid: number) => api.adminRestoreSnapshot(sid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-snapshots'] }),
+  });
   const snaps = snapsQ.data;
   if (!snaps) return <p className="py-10 text-center text-sm text-muted-foreground">…</p>;
   return (
@@ -377,6 +381,15 @@ function SnapshotsSection() {
                     <td className="py-1.5 text-right text-xs text-muted-foreground/70">{fmtDate(s.created_at)}</td>
                     <td className="py-1.5 text-right">
                       <div className="flex items-center justify-end gap-3">
+                        {s.backup_volume_id && (
+                          <button
+                            onClick={() => { if (window.confirm(t('admin.snapRestoreConfirm'))) restore.mutate(s.id); }}
+                            disabled={restore.isPending}
+                            className="text-xs font-medium text-emerald-600 transition hover:underline disabled:opacity-40 dark:text-emerald-400"
+                          >
+                            {t('admin.snapRestore')}
+                          </button>
+                        )}
                         {s.ova_url && (
                           <a href={s.ova_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400">
                             {t('admin.snapDownload')}

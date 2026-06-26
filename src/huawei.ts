@@ -112,6 +112,29 @@ export function huawei(env: Env): CloudProvider {
       }
       const rawName = (p.nameTag && p.nameTag.trim()) || `vm-portal-req-${p.requestId}`;
       const name = rawName.replace(/[^a-zA-Z0-9-_.]/g, '-').slice(0, 64);
+
+      // Restauration (Option A) : booter sur un VOLUME existant (sauvegarde) via l'API Nova.
+      // Synchrone → renvoie le serverId. L'EIP n'est PAS posée par Nova : le réconciliateur
+      // l'attache ensuite (attachEip). Le disque garde déjà sa clé SSH (authorized_keys).
+      if (p.bootVolumeId) {
+        const netId = (await req(ep.vpc, 'GET', `/v1/${pid}/subnets/${env.HUAWEI_SUBNET_ID}`))?.subnet?.neutron_network_id;
+        if (!netId) throw new Error('Restauration : neutron_network_id introuvable');
+        const novaServer: any = {
+          name,
+          flavorRef: p.flavor,
+          networks: [{ uuid: netId }],
+          block_device_mapping_v2: [
+            { boot_index: 0, uuid: p.bootVolumeId, source_type: 'volume', destination_type: 'volume', delete_on_termination: false },
+          ],
+        };
+        if (env.HUAWEI_AZ) novaServer.availability_zone = env.HUAWEI_AZ;
+        if (p.userData) novaServer.user_data = b64(p.userData);
+        const nj = await req(ep.ecs, 'POST', `/v2.1/${pid}/servers`, { body: { server: novaServer } });
+        const serverId = nj?.server?.id;
+        if (!serverId) throw new Error('Nova boot-from-volume : pas de server.id');
+        return { serverId };
+      }
+
       const bandwidth = Number(env.HUAWEI_EIP_BANDWIDTH) > 0 ? Number(env.HUAWEI_EIP_BANDWIDTH) : 5;
 
       const server: any = {
@@ -172,6 +195,21 @@ export function huawei(env: Env): CloudProvider {
       // (sauvegarde à la suppression : le disque conservé survit et permet de restaurer).
       await req(ep.ecs, 'POST', `/v1/${pid}/cloudservers/delete`, {
         body: { servers: [{ id: serverId }], delete_publicip: true, delete_volume: !keepVolume },
+      });
+    },
+
+    // Attache une EIP (IP publique) à une VM. Utilisé pour les VM restaurées bootées via Nova
+    // (boot-from-volume), qui ne reçoivent pas d'EIP automatiquement.
+    async attachEip(serverId: string): Promise<void> {
+      const bandwidth = Number(env.HUAWEI_EIP_BANDWIDTH) > 0 ? Number(env.HUAWEI_EIP_BANDWIDTH) : 5;
+      const ifs = await req(ep.ecs, 'GET', `/v1/${pid}/cloudservers/${serverId}/os-interface`);
+      const portId = ifs?.interfaceAttachments?.[0]?.port_id;
+      if (!portId) throw new Error('attachEip : port_id introuvable');
+      await req(ep.vpc, 'POST', `/v1/${pid}/publicips`, {
+        body: {
+          publicip: { type: '5_bgp', port_id: portId },
+          bandwidth: { name: `vm-portal-${serverId.slice(0, 8)}`, size: bandwidth, share_type: 'PER', charge_mode: 'traffic' },
+        },
       });
     },
 

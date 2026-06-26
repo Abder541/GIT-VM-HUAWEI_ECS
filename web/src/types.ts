@@ -137,6 +137,7 @@ export interface Snapshot {
   os: string | null;
   created_at: string;
   completed_at: string | null;
+  backup_volume_id: string | null; // sauvegarde « disque conservé » ; null = snapshot EVS
 }
 
 export interface AdminSnapshot extends Snapshot {

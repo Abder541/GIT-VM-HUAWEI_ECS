@@ -167,10 +167,11 @@ export function huawei(env: Env): CloudProvider {
       return { state: normalizeState(s.status), publicIp, launchTime: utcIso(s['OS-SRV-USG:launched_at']) };
     },
 
-    async terminateInstance(serverId: string): Promise<void> {
-      // Détruit la VM + libère l'EIP + supprime le volume racine (FinOps).
+    async terminateInstance(serverId: string, keepVolume = false): Promise<void> {
+      // Détruit la VM + libère l'EIP. Supprime le disque racine (FinOps) SAUF si keepVolume
+      // (sauvegarde à la suppression : le disque conservé survit et permet de restaurer).
       await req(ep.ecs, 'POST', `/v1/${pid}/cloudservers/delete`, {
-        body: { servers: [{ id: serverId }], delete_publicip: true, delete_volume: true },
+        body: { servers: [{ id: serverId }], delete_publicip: true, delete_volume: !keepVolume },
       });
     },
 

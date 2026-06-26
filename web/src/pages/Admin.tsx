@@ -366,6 +366,9 @@ function SnapshotsSection() {
                       ) : (
                         s.vm_name || '—'
                       )}
+                      <span className={`ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${s.backup_volume_id ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                        {s.backup_volume_id ? t('admin.snapKindBackup') : t('admin.snapKindSnap')}
+                      </span>
                     </td>
                     <td className="max-w-[12rem] truncate py-1.5 text-muted-foreground">{s.user_email}</td>
                     <td className="max-w-[14rem] truncate py-1.5 text-muted-foreground" title={s.snapshot_id ?? undefined}>{s.description || '—'}</td>

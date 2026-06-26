@@ -44,6 +44,13 @@ export interface LaunchParams {
   userData?: string;
   /** Nom lisible → tag `Name` de la VM (repli : `vm-portal-req-<id>`). */
   nameTag?: string | null;
+  /**
+   * Restauration (Option A) : booter directement sur un VOLUME EVS existant (sauvegarde
+   * conservée) au lieu de créer un disque depuis une image. Quand défini, l'implémentation
+   * utilise l'API Nova (block_device_mapping_v2) et renvoie un `serverId` (synchrone).
+   * `imageId`/`sizeGb` sont alors ignorés (le disque existe déjà).
+   */
+  bootVolumeId?: string;
 }
 
 /**
@@ -51,7 +58,10 @@ export interface LaunchParams {
  * résolu au tick suivant du réconciliateur (`resolveLaunch`).
  */
 export interface LaunchHandle {
-  jobId: string;
+  /** Création ECS native asynchrone → résolu par `resolveLaunch`. */
+  jobId?: string;
+  /** Boot-from-volume (Nova) : `server_id` déjà connu (synchrone), pas de job à résoudre. */
+  serverId?: string;
 }
 
 /**
@@ -126,8 +136,11 @@ export interface CloudProvider {
   /** Résout `jobId → serverId` (null tant que le job n'est pas terminé). Réconciliateur. */
   resolveLaunch(handle: LaunchHandle): Promise<string | null>;
   describeInstance(serverId: string): Promise<InstanceStatus>;
-  /** Détruit la VM ET ses ressources liées (EIP, volume racine) — enjeu FinOps + drift. */
-  terminateInstance(serverId: string): Promise<void>;
+  /**
+   * Détruit la VM ET ses ressources liées (EIP, volume racine) — enjeu FinOps + drift.
+   * `keepVolume` (sauvegarde à la suppression) : conserve le disque racine pour restauration.
+   */
+  terminateInstance(serverId: string, keepVolume?: boolean): Promise<void>;
   startInstance(serverId: string): Promise<void>;
   stopInstance(serverId: string): Promise<void>;
   rebootInstance(serverId: string): Promise<void>;

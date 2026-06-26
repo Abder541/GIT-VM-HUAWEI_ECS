@@ -188,6 +188,20 @@ export interface SnapshotRow {
   os: string | null;
   created_at: string;
   completed_at: string | null;
+  backup_volume_id: string | null; // sauvegarde « disque conservé » (Option A) ; null = snapshot EVS
+}
+
+// Enregistre une SAUVEGARDE (disque EVS conservé à la suppression). Prête immédiatement
+// (le disque existe déjà) → status 'completed'. backup_volume_id non nul la distingue d'un snapshot.
+export async function createBackupRow(
+  env: Env, requestId: number, owner: string, volumeId: string, sizeGb: number | null, os: string | null, description: string
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO snapshots (request_id, user_email, backup_volume_id, description, size_gb, status, os, completed_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'completed', ?6, datetime('now'))`
+  )
+    .bind(requestId, owner, volumeId, description.slice(0, 255), sizeGb ?? null, os ?? null)
+    .run();
 }
 
 export async function createSnapshotRow(

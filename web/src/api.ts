@@ -87,6 +87,7 @@ export const api = {
   adminCost: () => req<CostReport>('/api/admin/cost'),
   adminSnapshots: () => req<{ snapshots: AdminSnapshot[] }>('/api/admin/snapshots').then((r) => r.snapshots),
   adminDeleteSnapshot: (sid: number) => req<{ ok: true }>(`/api/admin/snapshots/${sid}`, { method: 'DELETE' }),
+  adminRestoreSnapshot: (sid: number) => req<{ ok: true; id: number }>(`/api/admin/snapshots/${sid}/restore`, { method: 'POST' }),
   adminUsers: () => req<{ users: AdminUser[] }>('/api/admin/users').then((r) => r.users),
   adminAudit: (limit = 150) =>
     req<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`).then((r) => r.entries),

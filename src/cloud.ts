@@ -141,6 +141,8 @@ export interface CloudProvider {
    * `keepVolume` (sauvegarde à la suppression) : conserve le disque racine pour restauration.
    */
   terminateInstance(serverId: string, keepVolume?: boolean): Promise<void>;
+  /** Attache une EIP (IP publique) à une VM — pour les VM restaurées bootées via Nova. */
+  attachEip(serverId: string): Promise<void>;
   startInstance(serverId: string): Promise<void>;
   stopInstance(serverId: string): Promise<void>;
   rebootInstance(serverId: string): Promise<void>;
